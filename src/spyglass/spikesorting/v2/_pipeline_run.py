@@ -484,15 +484,17 @@ def run_v2_pipeline(
         for warning in preflight_warnings:
             logger.warning(f"run_v2_pipeline preflight: {warning}")
     elif preflight and is_concat:
-        # Concat preflight: the SessionGroup + members + the preset's
-        # motion-correction row, plus the compute-time param rows and sorter
-        # binary (no artifact stage), all BEFORE the heavy member / concat
-        # populate. Raises PreflightError with the exact fix on the first
-        # missing prerequisite.
+        # Concat preflight: the SessionGroup + members + each member's
+        # raw/valid-times/sort-group/rate prerequisites + the preset's
+        # motion-correction row (+ auto-curation rows when opted in) + the
+        # compute-time param rows and sorter binary (no artifact stage), all
+        # BEFORE the heavy member / concat populate. Raises PreflightError with
+        # the exact fix on the first missing prerequisite.
         preflight_warnings = assert_concat_preflight(
             concat_session_group_owner,
             concat_session_group_name,
             bundle,
+            auto_curate=auto_curate,
         )
 
     # Per-stage observability. For each stage: derive computed-vs-reused from

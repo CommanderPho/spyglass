@@ -388,20 +388,29 @@ def assert_preset_compute_rows(bundle, *, with_artifact: bool = True) -> None:
 
 
 def assert_concat_preflight(
-    concat_session_group_owner, concat_session_group_name, bundle
+    concat_session_group_owner,
+    concat_session_group_name,
+    bundle,
+    *,
+    auto_curate: bool = False,
 ) -> list[str]:
     """Raise ``PreflightError`` if a concat run's prerequisites are missing.
 
-    Concat counterpart of :func:`preflight_v2_pipeline` (minus the
-    single-session session / interval / sort-group rows, which a ``SessionGroup``
-    supplies per member): the group + its members + the preset's
-    motion-correction row, plus the compute-time param rows and sorter binary via
+    Concat counterpart of :func:`preflight_v2_pipeline`: the group, its members,
+    and -- because each member is sorted through the same single-session
+    ``Recording`` build -- the per-member ``Raw`` / ``'raw data valid times'`` /
+    sort-group-electrode / sampling-rate prerequisites, plus the preset's
+    motion-correction row, the ``auto_curate`` metric/rule/metric-waveform rows
+    (when opted in), and the compute-time param rows + sorter binary via
     :func:`assert_preset_compute_rows` (``with_artifact=False`` -- a concat sort
-    runs no artifact stage). Fails fast BEFORE the heavy member / concat populate.
-    Returns the advisory-warning list (currently always empty) for symmetry with
+    runs no artifact stage). Fails fast BEFORE the heavy member / concat populate
+    rather than deep in a member ``populate`` with an opaque error. Returns the
+    advisory-warning list (currently always empty) for symmetry with
     :func:`preflight_v2_pipeline`.
     """
+    from spyglass.common import IntervalList, Raw
     from spyglass.spikesorting.v2.exceptions import PreflightError
+    from spyglass.spikesorting.v2.recording import SortGroupV2
     from spyglass.spikesorting.v2.session_group import (
         MotionCorrectionParameters,
         SessionGroup,
@@ -420,6 +429,68 @@ def assert_concat_preflight(
         raise PreflightError(
             f"run_v2_pipeline: SessionGroup {group_key} has no members."
         )
+
+    # Each member is sorted through the same single-session Recording build, so
+    # mirror preflight_v2_pipeline's per-session prerequisites for EVERY member;
+    # SessionGroup.Member's FK set validates only that the master rows exist, not
+    # Raw / 'raw data valid times' / a non-empty sort group / a matching rate, so
+    # a partially-ingested or empty-sort-group member would otherwise fail deep
+    # in the member populate with an opaque error.
+    members = (SessionGroup.Member & group_key).fetch(
+        "member_index", "nwb_file_name", "sort_group_id", as_dict=True
+    )
+    for member in members:
+        nwb = member["nwb_file_name"]
+        sort_group_id = int(member["sort_group_id"])
+        tag = (
+            f"concat member {member['member_index']} "
+            f"({nwb!r}, sort_group_id={sort_group_id})"
+        )
+        if not (Raw & {"nwb_file_name": nwb}):
+            raise PreflightError(
+                f"run_v2_pipeline: {tag} has no Raw electrical-series row (the "
+                "session is ingested but its Raw data is not). Re-run ingestion "
+                "(populate_all_common / insert_sessions)."
+            )
+        if not (
+            IntervalList
+            & {
+                "nwb_file_name": nwb,
+                "interval_list_name": "raw data valid times",
+            }
+        ):
+            raise PreflightError(
+                f"run_v2_pipeline: {tag} is missing IntervalList 'raw data "
+                "valid times', which the recording build reads for the raw "
+                "sample bounds. Re-run ingestion."
+            )
+        if not (
+            SortGroupV2.SortGroupElectrode
+            & {"nwb_file_name": nwb, "sort_group_id": sort_group_id}
+        ):
+            raise PreflightError(
+                f"run_v2_pipeline: {tag} SortGroupV2 has zero electrode "
+                "members; Recording.populate would raise 'has zero electrodes'. "
+                "Recreate it with SortGroupV2.set_group_by_shank(nwb_file_name="
+                "...)."
+            )
+        if bundle.sampling_rate_hz is not None:
+            actual_rate = float(
+                (Raw & {"nwb_file_name": nwb}).fetch1("sampling_rate")
+            )
+            if (
+                abs(actual_rate - bundle.sampling_rate_hz)
+                > 0.005 * bundle.sampling_rate_hz
+            ):
+                raise PreflightError(
+                    f"run_v2_pipeline: {tag} samples at {actual_rate:g} Hz but "
+                    f"the concat preset is tuned for {bundle.sampling_rate_hz} "
+                    "Hz (the rate-keyed sorter row "
+                    f"{bundle.sorter_params_name!r} holds its clip_size / "
+                    "detect_interval snippet window at that rate). Every member "
+                    "must share the preset's acquisition rate."
+                )
+
     if not (
         MotionCorrectionParameters
         & {
@@ -433,6 +504,55 @@ def assert_concat_preflight(
             f"{bundle.motion_correction_params_name!r} (the concat preset's "
             "motion recipe) is missing. Run initialize_v2_defaults()."
         )
+
+    # Auto-curation prerequisites (preset-level, same rows as single-session),
+    # only when the caller opts into auto_curate -- so a concat auto-curate run
+    # fails fast on a missing metric / rule / metric-waveform recipe rather than
+    # after the member + concat + sort compute.
+    if auto_curate:
+        from spyglass.spikesorting.v2._recipe_catalog import (
+            waveform_params_for_preprocessing,
+        )
+        from spyglass.spikesorting.v2.metric_curation import (
+            AutoCurationRules,
+            QualityMetricParameters,
+        )
+        from spyglass.spikesorting.v2.sorting import (
+            AnalyzerWaveformParameters,
+        )
+
+        if not (
+            QualityMetricParameters
+            & {"metric_params_name": bundle.metric_params_name}
+        ):
+            raise PreflightError(
+                "run_v2_pipeline: QualityMetricParameters row "
+                f"{bundle.metric_params_name!r} (the auto-curation metric set) "
+                "is missing. Run initialize_v2_defaults()."
+            )
+        if not (
+            AutoCurationRules
+            & {"auto_curation_rules_name": bundle.auto_curation_rules_name}
+        ):
+            raise PreflightError(
+                "run_v2_pipeline: AutoCurationRules row "
+                f"{bundle.auto_curation_rules_name!r} (the auto-curation rule "
+                "set) is missing. Run initialize_v2_defaults()."
+            )
+        metric_waveform_params_name = waveform_params_for_preprocessing(
+            bundle.preprocessing_params_name
+        )[1]
+        if not (
+            AnalyzerWaveformParameters
+            & {"waveform_params_name": metric_waveform_params_name}
+        ):
+            raise PreflightError(
+                "run_v2_pipeline: AnalyzerWaveformParameters row "
+                f"{metric_waveform_params_name!r} (the whitened metric analyzer "
+                "recipe auto-curation scores on) is missing. Run "
+                "initialize_v2_defaults()."
+            )
+
     assert_preset_compute_rows(bundle, with_artifact=False)
     return []
 
