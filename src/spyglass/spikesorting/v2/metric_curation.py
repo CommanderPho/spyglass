@@ -1942,16 +1942,14 @@ class CurationEvaluation(SpyglassMixin, dj.Computed):
         it drafts only merges and inherits the evaluated curation's labels; it
         does not apply pre-merge evaluation labels to the draft.
         """
-        accepted = self._require_merge_acceptance(
-            key,
-            merge_groups,
-            use_all_suggested_merges,
-            action_name="preview_merges",
-        )
+        # _create_preview_curation (whose only caller is this method) resolves
+        # the merge groups and enforces the populated-evaluation + non-empty
+        # contracts itself, so pass the request through rather than resolving
+        # the same suggestions twice.
         return self._create_preview_curation(
             key,
-            merge_groups=accepted,
-            use_all_suggested_merges=False,
+            merge_groups=merge_groups,
+            use_all_suggested_merges=use_all_suggested_merges,
             labels={} if labels is None else labels,
             label_policy="inherit",
             description=description,
