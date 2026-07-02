@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import datajoint as dj
 import pytest
+from datajoint.errors import DataJointError
 
 
 @pytest.fixture(scope="module")
@@ -249,6 +250,35 @@ def test_fetch_nwb_string_parent_key_restriction(two_source_merge):
     assert len(nwb_list) == 1
     assert "leaf_a_id" in nwb_list[0]
     assert merge_ids == [merge_id_a]
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_fetch_nwb_string_unknown_column_raises(two_source_merge):
+    """A string restriction naming a column NO source's parent has re-raises the
+    original DataJointError -- a typo must not silently read as a no-match.
+
+    The string-restriction fallback probes each source; if the restriction is
+    evaluable against neither the master nor any source's parent, it re-raises
+    rather than returning an empty result (which would hide the typo).
+    """
+    Merge = two_source_merge["Merge"]
+    with pytest.raises(DataJointError):
+        Merge().fetch_nwb("not_a_real_column = 0")
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_fetch_nwb_string_valid_column_no_match_is_empty(two_source_merge):
+    """A string restriction on a REAL parent column that matches no rows returns
+    an empty result (not an error) -- the genuine-no-match case must stay empty
+    even though a typo'd column (above) raises."""
+    Merge = two_source_merge["Merge"]
+    nwb_list, merge_ids = Merge().fetch_nwb(
+        "leaf_a_id = 999999", return_merge_ids=True
+    )
+    assert nwb_list == []
+    assert merge_ids == []
 
 
 @pytest.mark.slow

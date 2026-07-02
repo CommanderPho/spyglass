@@ -666,16 +666,29 @@ class Merge(ExportMixin, dj.Manual):
                 # non-matching source reaching the per-source resolution below
                 # (which would raise "0 potential parents").
                 sources = set()
+                applied_to_any_source = False
                 for part in self.parts(as_objects=True):
                     source_name = self._part_name(part)
                     parent = self.merge_get_parent_class(source_name)
                     if parent is None:
                         continue
                     try:
-                        if (self * part * parent) & restriction:
-                            sources.add(source_name)
+                        matched = bool((self * part * parent) & restriction)
                     except DataJointError:
-                        continue  # restriction invalid for this source
+                        # The restriction names a column THIS source's parent
+                        # lacks; it may still be valid for another source.
+                        continue
+                    applied_to_any_source = True
+                    if matched:
+                        sources.add(source_name)
+                if not applied_to_any_source:
+                    # The restriction is evaluable against neither the master nor
+                    # any source's parent -- e.g. a typo'd column name or
+                    # malformed SQL. Re-raise the original error rather than
+                    # return a silent empty result that reads as a legitimate
+                    # no-match. (A valid column that simply matches no rows keeps
+                    # applied_to_any_source True and correctly yields no files.)
+                    raise
             if len(sources) > 1 and not multi_source:
                 self._warn_multi_source(sources)
             for source in sources:
