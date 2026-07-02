@@ -648,9 +648,33 @@ class Merge(ExportMixin, dj.Manual):
             # ``{"source": X}`` restriction resolves to that one source instead
             # of all of them.)
             merge_restriction = self.extract_merge_id(restriction)
-            sources = set(
-                (self & restriction).fetch(self._reserved_sk, log_export=False)
-            )
+            try:
+                sources = set(
+                    (self & restriction).fetch(
+                        self._reserved_sk, log_export=False
+                    )
+                )
+            except DataJointError:
+                # An un-introspectable string restriction naming a PARENT
+                # attribute cannot be evaluated against the master (no such
+                # column), and ``parent_attrs`` was empty so the
+                # parent-attribute branch below was not taken. Probe each source
+                # through its ``master * part * parent`` join to keep only the
+                # ones whose parent actually carries the restriction. This makes
+                # discovery exact -- no spurious multi-source warning, and no
+                # non-matching source reaching the per-source resolution below
+                # (which would raise "0 potential parents").
+                sources = set()
+                for part in self.parts(as_objects=True):
+                    source_name = self._part_name(part)
+                    parent = self.merge_get_parent_class(source_name)
+                    if parent is None:
+                        continue
+                    try:
+                        if (self * part * parent) & restriction:
+                            sources.add(source_name)
+                    except DataJointError:
+                        continue  # restriction invalid for this source
             if len(sources) > 1 and not multi_source:
                 self._warn_multi_source(sources)
             for source in sources:

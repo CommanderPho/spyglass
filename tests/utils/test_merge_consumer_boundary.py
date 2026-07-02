@@ -231,6 +231,28 @@ def test_fetch_nwb_parent_key_restriction_resolves_one_source(
 
 @pytest.mark.slow
 @pytest.mark.integration
+def test_fetch_nwb_string_parent_key_restriction(two_source_merge):
+    """A STRING restriction naming a parent key resolves like the dict form.
+
+    ``fetch_nwb`` documents accepting parent-attribute restrictions, but a
+    string (e.g. ``"leaf_a_id = 0"``) is un-introspectable, so it must NOT be
+    applied raw to the master (which has no ``leaf_a_id`` column) during source
+    discovery. It resolves to just the owning source, not a crash and not the
+    other source's file.
+    """
+    Merge = two_source_merge["Merge"]
+    merge_id_a = two_source_merge["merge_id_a"]
+
+    nwb_list, merge_ids = Merge().fetch_nwb(
+        "leaf_a_id = 0", return_merge_ids=True
+    )
+    assert len(nwb_list) == 1
+    assert "leaf_a_id" in nwb_list[0]
+    assert merge_ids == [merge_id_a]
+
+
+@pytest.mark.slow
+@pytest.mark.integration
 def test_fetch_nwb_mixed_master_and_parent_restriction(two_source_merge):
     """A restriction mixing a master column (merge_id) and a parent key
     (leaf_a_id) resolves correctly -- the source whose parent lacks merge_id
