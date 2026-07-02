@@ -1053,26 +1053,37 @@ def test_recording_make_global_median_reference(polymer_smoke_session):
     Recording.populate(rec_pk_unref, reserve_jobs=False)
     traces_unref = Recording().get_recording(rec_pk_unref).get_traces()
 
-    # Switch SortGroupV2 to global-median reference and repopulate. The
-    # content_hash depends on the input data, so the referenced recording's
-    # identity reflects the reference change.
-    SortGroupV2.update1(
+    # Switch the sort group to global-median reference. reference_mode is folded
+    # into recording_id (via recording_input_hash), so this defines a DISTINCT
+    # recording, not an in-place edit of the unref one: the update1 guard rejects
+    # a bare reference edit, so use its escape hatch, then insert_selection mints
+    # a new recording_id for the global-median reference.
+    SortGroupV2().update1(
         {
             "nwb_file_name": nwb_file_name,
             "sort_group_id": sort_group_id,
             "reference_mode": "global_median",
-        }
+        },
+        allow_reference_mutation=True,
     )
     assert (
         SortGroupV2
         & {"nwb_file_name": nwb_file_name, "sort_group_id": sort_group_id}
     ).fetch1("reference_mode") == "global_median"
-    # Drop the unref Recording so the new selection materializes a
-    # fresh global-median recording rather than reusing the cached
-    # bytes.
-    (Recording & rec_pk_unref).super_delete(warn=False, force_masters=True)
-    Recording.populate(rec_pk_unref, reserve_jobs=False)
-    traces_ref = Recording().get_recording(rec_pk_unref).get_traces()
+    rec_pk_ref = RecordingSelection.insert_selection(
+        {
+            "nwb_file_name": nwb_file_name,
+            "sort_group_id": sort_group_id,
+            "interval_list_name": "raw data valid times",
+            "preprocessing_params_name": "default",
+            "team_name": "v2_test_team",
+        }
+    )
+    # The reference change folds into the identity, so this is a NEW recording,
+    # not rec_pk_unref -- exactly the OP-3/OP-4 honesty guarantee.
+    assert rec_pk_ref != rec_pk_unref
+    Recording.populate(rec_pk_ref, reserve_jobs=False)
+    traces_ref = Recording().get_recording(rec_pk_ref).get_traces()
 
     # Pin (1): same shape (the channel set is unchanged for -2;
     # -1 also doesn't drop a channel, so shapes match).
@@ -1377,6 +1388,7 @@ def test_recording_selection_raises_on_duplicate_logical_identity(
     from spyglass.spikesorting.v2.recording import (
         RecordingSelection,
         SortGroupV2,
+        resolve_recording_input_hash,
     )
 
     _clean_session_v2(polymer_smoke_session)
@@ -1401,14 +1413,28 @@ def test_recording_selection_raises_on_duplicate_logical_identity(
         "team_name": "v2_test_team",
     }
     # Bypass the helper to plant the duplicate (this is what the
-    # guard exists to catch in case some script uses raw dj.insert).
+    # guard exists to catch in case some script uses raw dj.insert). Both
+    # planted rows carry the resolved input hash so they share the logical
+    # identity find-existing scopes to (FK set + recording_input_hash); a NULL
+    # hash would sit on a different identity axis and escape detection.
+    input_hash = resolve_recording_input_hash(
+        nwb_file_name, sort_group_id, "default"
+    )
     planted_ids = []
     RecordingSelection().insert1(
-        {**logical_identity, "recording_id": uuid.uuid4()},
+        {
+            **logical_identity,
+            "recording_id": uuid.uuid4(),
+            "recording_input_hash": input_hash,
+        },
         allow_direct_insert=True,
     )
     RecordingSelection().insert1(
-        {**logical_identity, "recording_id": uuid.uuid4()},
+        {
+            **logical_identity,
+            "recording_id": uuid.uuid4(),
+            "recording_input_hash": input_hash,
+        },
         allow_direct_insert=True,
     )
     planted_ids = list(

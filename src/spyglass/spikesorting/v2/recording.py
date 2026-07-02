@@ -250,27 +250,33 @@ class SortGroupV2(SpyglassMixin, dj.Manual):
         """Reject an in-place row edit unless ``allow_reference_mutation``.
 
         A sort group's ``reference_mode`` / ``reference_electrode_id`` shape the
-        referenced traces the ``Recording`` persists, but they are NOT part of
-        ``recording_id`` (which folds only the session, ``sort_group_id``,
-        interval, preprocessing params, and team). Editing them in place under
-        the same key therefore leaves any already-populated ``Recording`` cached
-        with the OLD reference and silently reused. Delete and recreate the sort
-        group instead -- via ``set_group_by_shank`` /
-        ``set_group_by_electrode_table_column`` with ``delete_existing_entries``
-        after reviewing the ``DeletionPreview`` -- so the stale ``Recording``
-        cascades away. Pass ``allow_reference_mutation=True`` only for a
-        deliberate edit of a group with no populated ``Recording``.
+        referenced traces the ``Recording`` persists AND are folded into
+        ``recording_id`` (via ``recording_input_hash``), so a reference change
+        defines a DISTINCT recording. Editing them in place under the same
+        sort-group key therefore desynchronizes the group from every
+        ``recording_id`` already minted off its old reference: re-running
+        ``insert_selection`` mints a new recording for the new reference, and
+        re-populating an old ``recording_id`` now raises
+        ``RecordingInputDriftError`` rather than silently serving stale bytes.
+        The clean path for a reference change is ``insert_selection`` (which
+        mints the new-reference recording) or delete-and-recreate the group --
+        via ``set_group_by_shank`` / ``set_group_by_electrode_table_column`` with
+        ``delete_existing_entries`` after reviewing the ``DeletionPreview``.
+        Pass ``allow_reference_mutation=True`` for a deliberate in-place edit
+        (e.g. a test, or a group whose old recordings are being re-minted).
         """
         if not allow_reference_mutation:
             raise dj.errors.DataJointError(
                 "In-place update1 of SortGroupV2 is not supported: a group's "
-                "reference config shapes the persisted Recording but is not in "
-                "recording_id, so editing it under the same key leaves an "
-                "already-populated Recording cached with the old reference. "
-                "Delete and recreate the sort group instead (set_group_by_* "
-                "with delete_existing_entries) so the stale Recording cascades "
-                "away. Pass allow_reference_mutation=True only for a group with "
-                "no populated Recording."
+                "reference config shapes the persisted Recording and is folded "
+                "into recording_id, so a reference change defines a new "
+                "recording. Editing it in place desynchronizes the group from "
+                "the recording_ids already minted off its old reference. Change "
+                "the reference by delete-and-recreate (set_group_by_* with "
+                "delete_existing_entries) and re-run insert_selection, which "
+                "mints the new-reference recording. Pass "
+                "allow_reference_mutation=True only for a deliberate in-place "
+                "edit."
             )
         super().update1(row)
 
