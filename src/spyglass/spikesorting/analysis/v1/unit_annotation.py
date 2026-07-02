@@ -3,6 +3,9 @@ from typing import Optional, Union
 import datajoint as dj
 import numpy as np
 
+from spyglass.spikesorting.analysis.v1._unit_annotation_helpers import (
+    spikes_for_requested_units,
+)
 from spyglass.spikesorting.analysis.v1.group import (
     _get_nwb_unit_ids,
     _get_spike_obj_name,
@@ -158,17 +161,17 @@ class UnitAnnotation(SpyglassMixin, dj.Manual):
                 )
             )
             include_unit = sorted(set(include_by_merge.get(merge_id, [])))
+            # Select by TRUE unit id (raises an actionable error, not a bare
+            # KeyError, if an old positional annotation misses on a sparse id
+            # set); build the parallel unit_ids only after the lookup succeeds.
             spikes.extend(
-                [
-                    unit_id_to_spike_times[int(unit_id)]
-                    for unit_id in include_unit
-                ]
+                spikes_for_requested_units(
+                    unit_id_to_spike_times, include_unit, merge_id
+                )
             )
             unit_ids.extend(
-                [
-                    {"spikesorting_merge_id": merge_id, "unit_id": unit_id}
-                    for unit_id in include_unit
-                ]
+                {"spikesorting_merge_id": merge_id, "unit_id": unit_id}
+                for unit_id in include_unit
             )
 
         if return_unit_ids:
