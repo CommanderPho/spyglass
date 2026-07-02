@@ -176,6 +176,61 @@ class SortGroupV2(SpyglassMixin, dj.Manual):
         -> Electrode
         """
 
+        def insert(self, rows, **kwargs):
+            """Insert members, rejecting the group's own 'specific' reference.
+
+            The reference electrode is subtracted then dropped from the
+            recording, so a reference that is also a member would silently sort
+            one channel short. Recording.make already rejects this via
+            assert_reference_not_member; catch it here, at group construction
+            (the manual-insert path -- set_group_by_shank enforces it too),
+            instead of deferring to a late, opaque populate failure.
+            """
+            rows = [dict(r) for r in rows]
+            self._assert_no_reference_member(rows)
+            super().insert(rows, **kwargs)
+
+        def insert1(self, row, **kwargs):
+            row = dict(row)
+            self._assert_no_reference_member([row])
+            super().insert1(row, **kwargs)
+
+        @staticmethod
+        def _assert_no_reference_member(rows):
+            # One master fetch per (session, sort_group), not per row.
+            by_group: dict = {}
+            for r in rows:
+                by_group.setdefault(
+                    (r["nwb_file_name"], int(r["sort_group_id"])), set()
+                ).add(int(r["electrode_id"]))
+            for (nwb_file_name, sort_group_id), ids in by_group.items():
+                master = (
+                    SortGroupV2
+                    & {
+                        "nwb_file_name": nwb_file_name,
+                        "sort_group_id": sort_group_id,
+                    }
+                ).fetch(
+                    "reference_mode", "reference_electrode_id", as_dict=True
+                )
+                if not master:
+                    continue  # missing master -> the FK surfaces it
+                ref_mode = master[0]["reference_mode"]
+                ref_id = master[0]["reference_electrode_id"]
+                if (
+                    ref_mode == "specific"
+                    and ref_id is not None
+                    and int(ref_id) in ids
+                ):
+                    raise ValueError(
+                        f"SortGroupV2 sort_group_id={sort_group_id} for "
+                        f"{nwb_file_name!r}: electrode {int(ref_id)} is the "
+                        "group's 'specific' reference and cannot also be a "
+                        "member -- the reference is subtracted then dropped, so "
+                        "the sort would run one channel short. Use a "
+                        "cross-group reference electrode."
+                    )
+
     def insert1(self, row, **kwargs):
         """Insert one row after validating its reference fields."""
         _validate_reference_fields(dict(row))

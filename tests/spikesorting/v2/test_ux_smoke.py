@@ -611,3 +611,59 @@ def test_sort_group_geometry_specific_reference_star_row(ux_session):
         assert {row["electrode_id"] for row in member_rows} == member_ids
     finally:
         (SortGroupV2 & key).delete(safemode=False)
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_sort_group_electrode_rejects_reference_as_member(ux_session):
+    """Inserting a group's own 'specific' reference as a member is rejected at
+    insert time, not deferred to an opaque Recording.populate failure.
+
+    The reference is subtracted then dropped from the recording, so a reference
+    that is also a member would silently sort one channel short; the write path
+    already rejects it (assert_reference_not_member), and this pins that the
+    manual-insert path fails at the same point a helper (set_group_by_shank)
+    would -- at group construction.
+    """
+    from spyglass.common.common_ephys import Electrode
+    from spyglass.spikesorting.v2.recording import SortGroupV2
+
+    nwb = ux_session
+    electrodes = sorted(
+        (Electrode & {"nwb_file_name": nwb}).fetch(
+            "electrode_group_name", "electrode_id", as_dict=True
+        ),
+        key=lambda e: int(e["electrode_id"]),
+    )
+    reference = electrodes[-1]
+    reference_id = int(reference["electrode_id"])
+    key = {"nwb_file_name": nwb, "sort_group_id": 9992}
+    try:
+        SortGroupV2.insert1(
+            {
+                **key,
+                "reference_mode": "specific",
+                "reference_electrode_id": reference_id,
+            },
+            skip_duplicates=True,
+        )
+        # Inserting the reference electrode as a member is rejected here.
+        with pytest.raises(ValueError, match="reference"):
+            SortGroupV2.SortGroupElectrode.insert1(
+                {
+                    **key,
+                    "electrode_group_name": reference["electrode_group_name"],
+                    "electrode_id": reference_id,
+                }
+            )
+        # A non-reference member still inserts fine.
+        non_ref = electrodes[0]
+        SortGroupV2.SortGroupElectrode.insert1(
+            {
+                **key,
+                "electrode_group_name": non_ref["electrode_group_name"],
+                "electrode_id": int(non_ref["electrode_id"]),
+            }
+        )
+    finally:
+        (SortGroupV2 & key).delete(safemode=False)
