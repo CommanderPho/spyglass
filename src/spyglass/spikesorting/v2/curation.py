@@ -32,8 +32,10 @@ from spyglass.spikesorting.v2._curation_transforms import (
 )
 from spyglass.spikesorting.v2._signal_math import _MERGE_DEDUP_DELTA_MS
 from spyglass.spikesorting.v2._units_nwb import (
+    abs_spike_times_dataframe,
     build_lazy_merged_sorting_from_samples,
     build_lazy_merged_sorting,
+    empty_spike_times_dataframe,
     numpysorting_from_abs_times,
     numpysorting_from_sample_indices,
     read_units_abs_spike_times,
@@ -1605,8 +1607,6 @@ class CurationV2(FactoryOnlyMaster, SpyglassMixin, dj.Manual):
         ``CurationLabel.mua`` is the typed equivalent for code that prefers an
         enum member over a string literal.
         """
-        from spyglass.spikesorting.v2._enums import CurationLabel
-
         return [label.value for label in CurationLabel]
 
     @classmethod
@@ -1893,12 +1893,9 @@ class CurationV2(FactoryOnlyMaster, SpyglassMixin, dj.Manual):
             )
             if not as_dataframe:
                 return si.NumpySorting.from_unit_dict({}, sampling_frequency=fs)
-            import pandas as pd
-
-            return pd.DataFrame(
-                {"spike_times": [], "curation_label": []},
-                index=pd.Index([], name="unit_id", dtype=int),
-            )
+            df = empty_spike_times_dataframe()
+            df["curation_label"] = []
+            return df
 
         if not as_dataframe:
             sample_indices = read_units_spike_sample_indices(abs_path)
@@ -1907,25 +1904,16 @@ class CurationV2(FactoryOnlyMaster, SpyglassMixin, dj.Manual):
             abs_times = read_units_abs_spike_times(abs_path)
             return numpysorting_from_abs_times(abs_times, recording_row, fs)
 
-        import pandas as pd
-
         abs_times = read_units_abs_spike_times(abs_path)
-        # Join the ``curation_label`` lists from ``UnitLabel`` so the
-        # returned DataFrame carries a ``curation_label`` column.
-        # External notebook code reading ``df["curation_label"]`` works
-        # without poking at the part table directly.
-        unit_ids = list(abs_times)
+        # Reuse the shared spike-times DataFrame builder (the same one
+        # Sorting.get_sorting(as_dataframe=True) uses) so the base spike_times
+        # column + unit_id index cannot drift between the two, then join the
+        # ``curation_label`` lists from ``UnitLabel`` so external notebook code
+        # reading ``df["curation_label"]`` works without poking the part table.
         labels_by_unit = cls._labels_by_unit(key)
-        # Index by ``unit_id`` (the same indexing
-        # Sorting.get_sorting(as_dataframe=True) uses); see that
-        # method's docstring for the rationale.
-        return pd.DataFrame(
-            {
-                "spike_times": [abs_times[u] for u in unit_ids],
-                "curation_label": [labels_by_unit.get(u, []) for u in unit_ids],
-            },
-            index=pd.Index(unit_ids, name="unit_id"),
-        )
+        df = abs_spike_times_dataframe(abs_times)
+        df["curation_label"] = [labels_by_unit.get(u, []) for u in df.index]
+        return df
 
     @classmethod
     def has_unapplied_proposed_merges(cls, key, *, merges_applied=None) -> bool:
