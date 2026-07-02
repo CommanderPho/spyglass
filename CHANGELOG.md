@@ -68,13 +68,13 @@ registrations); existing v2 table definitions are unchanged.
 - **`run_v2_pipeline` gains opt-in stages.** `auto_curate=True` runs metric
   evaluation + auto-curation rules and commits the accepted labels into a child
   `CurationV2` — the default stays initial-curation-only, so a convenience call
-  never silently commits labels or merges. `figpack=True` publishes an offline
+  never silently commits labels or merges. `build_figpack_view=True` publishes an offline
   FigPack curation bundle of the root curation and returns its URI. A
   `concat_session_group_owner` / `concat_session_group_name` pair routes the run
   through `ConcatenatedRecording` for same-day chronic sorting (mutually
   exclusive with the single-session inputs; no artifact stage). `require_units`
   keeps the graceful zero-unit default (an empty-but-real, merge-keyable row).
-- **`run_v2_unit_match(session_group_owner, session_group_name, ...)`** is the
+- **`run_v2_unit_match(session_group_owner=..., session_group_name=..., ...)`** is the
   match-and-track convenience function for the sort-then-match workflow (it does
   not sort the members): it requires explicit per-member `curation_choices`
   (never auto-picks "latest"), populates `UnitMatch` + `TrackedUnit` from
@@ -470,8 +470,8 @@ contributor.
   curation-scoped temporary analyzer over the merged sorting for an applied-merge
   curation (cleaned immediately, never published to the analyzer cache). The
   metric index is asserted to equal the curation's `CurationV2.Unit` set before
-  any output is written. `get_metrics` / `get_labels` / `get_merge_groups`
-  read the proposals back; the `create_curation` / `use_evaluation_labels` /
+  any output is written. `get_metrics` / `get_labels` / `get_suggested_merge_groups`
+  read the proposals back; the `accept_evaluation_outputs` / `use_evaluation_labels` /
   `overlay_evaluation_labels` acceptance helpers (below) commit them into a child curation.
 
 #### Spike Sorting v2: parent-state curation composition and evaluation acceptance
@@ -497,7 +497,7 @@ the interim `AnalyzerCuration` table is removed.
   `preview_merges` (draft an unapplied merge for review), and
   `use_evaluation_labels` / `overlay_evaluation_labels` (write the evaluation's
   label verdict -- clearing stale labels -- vs. keep current labels and add the
-  proposed ones). The lower-level `create_curation` (merges + labels combined)
+  proposed ones). The lower-level `accept_evaluation_outputs` (merges + labels combined)
   and `create_preview_curation` (explicit draft) remain the expert API. All
   acceptance writes a committed/preview child carrying
   `curation_source='curation_evaluation'`, requires a POPULATED evaluation, and
@@ -594,7 +594,7 @@ computed table that walks a committed curation's `SortingAnalyzer` extensions to
 compute SpikeInterface 0.104 quality metrics, propose merges (via
 `compute_merge_unit_groups` presets), and propose auto-curation labels.
 Proposals are written to three NWB tables (`quality_metrics`,
-`merge_suggestions`, `proposed_labels`); `create_curation()` /
+`merge_suggestions`, `proposed_labels`); `accept_evaluation_outputs()` /
 `use_evaluation_labels()` / `overlay_evaluation_labels()` commit them into a child `CurationV2` row
 (`curation_source='curation_evaluation'`). (This subsumes the interim
 `AnalyzerCuration` table, which was removed -- see above.)
@@ -607,7 +607,7 @@ Proposals are written to three NWB tables (`quality_metrics`,
   fraction, not SI's unbounded `isi_violations_ratio`; the 0.99
   `nn_isolation` / `nn_noise_overlap` metric names are replaced by the
   `nn_advanced` PCA metric's two output columns.
-- Fetch/notebook parity: `get_metrics` / `get_labels` / `get_merge_groups` /
+- Fetch/notebook parity: `get_metrics` / `get_labels` / `get_suggested_merge_groups` /
   `get_waveforms`, the static `plot_units_qc` population QC plot, and the ported
   BurstPair views (`plot_correlograms`, `investigate_pair_xcorrel`,
   `investigate_pair_peaks`, `plot_peak_over_time`).
@@ -724,7 +724,7 @@ made `@classmethod` for surface symmetry with v1.
 per-(kept-unit, contributor-unit) merge provenance with FK
 validation (user-authorized pre-production schema correction;
 chosen over v1's NWB-column pattern for queryability);
-`CurationV2.get_merge_groups(key)` and a `get_merged_sorting` that
+`CurationV2.get_unit_contributor_groups(key)` and a `get_merged_sorting` that
 actually applies merges at fetch (matching v1 semantics);
 `Sorting.get_sorting(as_dataframe=True)` for pre-curation peek;
 `CurationV2.get_sorting(as_dataframe=True)` includes the
@@ -853,7 +853,7 @@ dropping; `restrict_by_artifact=True` now honors the v2
   curated-units NWB.** v1 wrote both at NWB-write time
   (`v1/curation.py:404-428`). v2 stores merge provenance in the
   `CurationV2.MergeGroup` part table (queryable via
-  `CurationV2.get_merge_groups(key)`) and defers metric columns to
+  `CurationV2.get_unit_contributor_groups(key)`) and defers metric columns to
   the `CurationEvaluation` stage. Pure-NWB consumers (DANDI export,
   external tools) lose these columns; DataJoint consumers gain the
   queryable + FK-validated shape.
@@ -1047,13 +1047,21 @@ cross-referenced here, not duplicated.
 
 **Dropped or relocated data**
 
-- The `IntervalList` row keyed by `recording_id` is no longer inserted;
-  the valid-times range lives on the `Recording` row instead
-  ([recording.py:781-782](./src/spyglass/spikesorting/v2/recording.py#L781-L782)).
-  Reconstruction recipe:
+- The `IntervalList` row keyed by `recording_id` is no longer inserted; v2 does
+  not persist it. The selected recording's valid times live on the `IntervalList`
+  you chose, reachable through `RecordingSelection`. Reconstruction recipe:
   ```python
-  row = (Recording & {"recording_id": rid}).fetch1()
-  valid_times = np.asarray([[row["saved_start"], row["saved_end"]]])
+  from spyglass.common import IntervalList
+  from spyglass.spikesorting.v2.recording import RecordingSelection
+
+  sel = (RecordingSelection & {"recording_id": rid}).fetch1()
+  valid_times = (
+      IntervalList
+      & {
+          "nwb_file_name": sel["nwb_file_name"],
+          "interval_list_name": sel["interval_list_name"],
+      }
+  ).fetch1("valid_times")  # ndarray, shape (n_intervals, 2)
   ```
 - Artifact `IntervalList.interval_list_name` is now prefixed
   `artifact_detection_{uuid}` (was a bare `str(uuid)`); use
