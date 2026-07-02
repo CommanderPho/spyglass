@@ -32,6 +32,7 @@ from spyglass.spikesorting.v2._selection_identity import (
     canonical_identity,
     deterministic_id,
     recording_identity_payload,
+    recording_input_hash,
 )
 
 # --------------------------------------------------------------------------
@@ -341,6 +342,83 @@ def test_assert_supplied_id_matches_non_uuid_string_gives_curated_error():
     target = uuid.uuid4()
     with pytest.raises(ValueError, match="does not match the deterministic"):
         assert_supplied_id_matches("not-a-uuid", target, field="recording_id")
+
+
+# --------------------------------------------------------------------------
+# recording_input_hash -- content-address a recording's RESOLVED construction
+# inputs (membership + reference + interpolate bad-channel set) so a changed
+# input mints a new recording_id. Order-independent over the two id sets;
+# sensitive to every field. Pure + DB-free (fed already-resolved values).
+# --------------------------------------------------------------------------
+
+
+def _rih(**over):
+    """Baseline recording_input_hash kwargs, overridable per-case."""
+    base = dict(
+        electrode_ids=[2, 0, 1],
+        reference_mode="none",
+        reference_electrode_id=None,
+        interpolated_bad_channel_ids=[],
+    )
+    base.update(over)
+    return recording_input_hash(**base)
+
+
+def test_recording_input_hash_is_stable_hex():
+    """Deterministic 64-char sha256 hex, stable across repeated calls."""
+    h = _rih()
+    assert isinstance(h, str)
+    assert len(h) == 64
+    assert h == _rih()
+
+
+def test_recording_input_hash_membership_order_independent():
+    """Electrode membership is a SET: a re-query in a different row order
+    yields the same hash (the ids are sorted before hashing)."""
+    assert _rih(electrode_ids=[0, 1, 2]) == _rih(electrode_ids=[2, 1, 0])
+
+
+def test_recording_input_hash_bad_channel_order_independent():
+    """The interpolate bad-channel set is order-independent too."""
+    assert _rih(interpolated_bad_channel_ids=[5, 9]) == _rih(
+        interpolated_bad_channel_ids=[9, 5]
+    )
+
+
+def test_recording_input_hash_sensitive_to_membership():
+    """Adding/removing an electrode (the OP-4 drift) changes the hash."""
+    assert _rih(electrode_ids=[0, 1, 2]) != _rih(electrode_ids=[0, 1, 2, 3])
+
+
+def test_recording_input_hash_sensitive_to_reference():
+    """A changed reference mode or electrode changes the hash."""
+    assert _rih(reference_mode="none") != _rih(reference_mode="specific")
+    assert _rih(reference_mode="specific", reference_electrode_id=4) != _rih(
+        reference_mode="specific", reference_electrode_id=7
+    )
+
+
+def test_recording_input_hash_sensitive_to_interpolate_set():
+    """A changed interpolate bad-channel set (the OP-3 drift) changes the
+    hash; an empty set is distinct from a non-empty one."""
+    assert _rih(interpolated_bad_channel_ids=[]) != _rih(
+        interpolated_bad_channel_ids=[5]
+    )
+    assert _rih(interpolated_bad_channel_ids=[5]) != _rih(
+        interpolated_bad_channel_ids=[5, 9]
+    )
+
+
+def test_recording_input_hash_numpy_ints_match_plain_ints():
+    """A numpy electrode id hashes identically to the plain int it becomes
+    once stored, so a fetched-then-rehashed set is idempotent."""
+    np = pytest.importorskip("numpy")
+    assert _rih(electrode_ids=[np.int64(0), np.int64(1)]) == _rih(
+        electrode_ids=[0, 1]
+    )
+    assert _rih(
+        reference_mode="specific", reference_electrode_id=np.int64(3)
+    ) == _rih(reference_mode="specific", reference_electrode_id=3)
 
 
 # --------------------------------------------------------------------------

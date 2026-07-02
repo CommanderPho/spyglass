@@ -294,6 +294,73 @@ def shared_group_member_set_hash(recording_ids) -> str:
     ).hexdigest()
 
 
+def recording_input_hash(
+    *,
+    electrode_ids,
+    reference_mode,
+    reference_electrode_id,
+    interpolated_bad_channel_ids,
+) -> str:
+    """Content-address a recording's RESOLVED construction inputs.
+
+    The ``recording_id`` identity is the FK set
+    (:data:`RECORDING_IDENTITY_FIELDS`), but ``Recording.make_fetch`` builds the
+    preprocessed recording from inputs that live OUTSIDE that FK set and can
+    change under a fixed ``sort_group_id`` / ``preprocessing_params_name``:
+
+    * the sort group's electrode MEMBERSHIP (``SortGroupV2.SortGroupElectrode``
+      is mutable after downstream recordings exist -- the OP-4 hole);
+    * the reference (``reference_mode`` / ``reference_electrode_id``);
+    * on the ``interpolate`` bad-channel path, the resolved interior bad-channel
+      set (the live ``Electrode.bad_channel='True'`` set -- the OP-3 hole).
+
+    This digest folds those resolved inputs into the ``recording_id`` so a
+    changed input mints a NEW recording, and it is snapshotted onto
+    ``RecordingSelection.recording_input_hash`` so ``make_fetch`` can re-derive
+    it and reject a drift (mirrors ``shared_group_member_set_hash`` /
+    ``SharedGroupSource.member_set_hash``). Both id sets are SETS: the ids are
+    sorted before hashing, so a re-query in a different row order is stable
+    while an added/removed channel changes the digest. On the ``remove`` /
+    ``none`` bad-channel paths pass an empty ``interpolated_bad_channel_ids`` --
+    those paths re-include nothing, so the bad-channel set does not enter the
+    recording's content.
+
+    Parameters
+    ----------
+    electrode_ids : iterable
+        The sort group's member electrode ids (``int`` or integer-like).
+    reference_mode : str
+        The sort group's ``reference_mode``.
+    reference_electrode_id : int or None
+        The specific-reference electrode id, or ``None`` for non-specific modes.
+    interpolated_bad_channel_ids : iterable
+        The resolved interior bad-channel ids re-included on the ``interpolate``
+        path; empty on ``remove`` / ``none``.
+
+    Returns
+    -------
+    str
+        The 64-char sha256 hex digest of the canonicalized inputs.
+    """
+    payload = {
+        "electrode_ids": sorted(int(e) for e in electrode_ids),
+        "reference_mode": str(reference_mode),
+        "reference_electrode_id": (
+            None
+            if reference_electrode_id is None
+            else int(reference_electrode_id)
+        ),
+        "interpolated_bad_channel_ids": sorted(
+            int(c) for c in interpolated_bad_channel_ids
+        ),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+
 def sorting_identity_payload(
     *,
     sorter: str,
