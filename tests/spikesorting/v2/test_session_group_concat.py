@@ -176,6 +176,38 @@ def test_create_group_rejects_duplicate_logical_members(
         )
 
 
+@pytest.mark.slow
+def test_assert_concat_preflight_guards_members_and_auto_curate(
+    same_day_group,
+):
+    """Concat preflight passes a fully-ingested group but fails fast on a
+    missing auto-curation prerequisite (rather than deep in the sort compute).
+
+    The passing case is also a regression guard for the per-member Raw /
+    'raw data valid times' / sort-group-electrode / sampling-rate checks: a
+    VALID same-day group must not trip any of them.
+    """
+    from spyglass.spikesorting.v2._pipeline_preflight import (
+        assert_concat_preflight,
+    )
+    from spyglass.spikesorting.v2.exceptions import PreflightError
+    from spyglass.spikesorting.v2.pipeline import _PIPELINE_PRESETS
+
+    gk = same_day_group["group_key"]
+    owner = gk["session_group_owner"]
+    name = gk["session_group_name"]
+    bundle = _PIPELINE_PRESETS["franklab_concat_hippocampus_30khz_ms5_2026_06"]
+
+    # A valid, fully-ingested group passes every per-member prerequisite.
+    assert assert_concat_preflight(owner, name, bundle) == []
+
+    # auto_curate=True with a missing metric row fails fast at preflight,
+    # not after the member + concat + sort compute.
+    bad = bundle.model_copy(update={"metric_params_name": "does_not_exist_xyz"})
+    with pytest.raises(PreflightError, match="QualityMetricParameters"):
+        assert_concat_preflight(owner, name, bad, auto_curate=True)
+
+
 @pytest.mark.usefixtures("dj_conn")
 def test_create_group_rejects_missing_member_key():
     """A member dict missing a required key raises a typed error, not KeyError."""
