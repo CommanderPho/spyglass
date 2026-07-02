@@ -634,3 +634,41 @@ def test_legacy_seeder_skips_matlab(monkeypatch, request):
         f"legacy seeder must skip MATLAB sorter {matlab_sorter!r} -- a local "
         "default row is rejected by the dispatcher at populate time"
     )
+
+
+@pytest.mark.usefixtures("dj_conn")
+def test_is_seed_dependent_sort_flags_only_stochastic_paths():
+    """A seed-dependent sort rejects an ambient-only seed; a deterministic one
+    does not. SI sorters cluster stochastically (always seed-dependent); the
+    clusterless thresholder is seed-dependent ONLY on its per-channel MAD noise
+    path (``threshold_unit='mad'`` with no explicit ``noise_levels``), which
+    samples random chunks -- the ``'uv'`` path and an explicit ``noise_levels``
+    are deterministic.
+    """
+    from spyglass.spikesorting.v2.sorting import SorterParameters
+
+    dep = SorterParameters._is_seed_dependent_sort
+
+    # SI clustering sorter: always seed-dependent.
+    assert dep("mountainsort5", {}) is True
+
+    # Clusterless MAD noise estimated from random chunks: seed-dependent
+    # (whether ``noise_levels`` is absent or explicitly None).
+    assert dep("clusterless_thresholder", {"threshold_unit": "mad"}) is True
+    assert (
+        dep(
+            "clusterless_thresholder",
+            {"threshold_unit": "mad", "noise_levels": None},
+        )
+        is True
+    )
+
+    # Clusterless deterministic paths: NOT seed-dependent.
+    assert dep("clusterless_thresholder", {"threshold_unit": "uv"}) is False
+    assert (
+        dep(
+            "clusterless_thresholder",
+            {"threshold_unit": "mad", "noise_levels": [1.0, 2.0]},
+        )
+        is False
+    )

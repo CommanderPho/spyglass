@@ -408,6 +408,28 @@ class SorterParameters(ImmutableParamsLookup, SpyglassMixin, dj.Lookup):
     _NON_SI_SORTERS: frozenset[str] = frozenset({"clusterless_thresholder"})
 
     @classmethod
+    def _is_seed_dependent_sort(cls, sorter: str, sorter_params: dict) -> bool:
+        """Whether the sort's output depends on ``random_seed``.
+
+        A seed-dependent sort must reject an ambient-only seed (present in the
+        SI-global / ``dj.config`` layer but not in the ``SorterParameters`` row):
+        the seed changes the output but is not folded into ``sorting_id``, so a
+        later ambient-seed change would silently reuse this sort.
+
+        SI sorters cluster stochastically, so they are always seed-dependent.
+        The ``clusterless_thresholder`` peak detector is deterministic EXCEPT on
+        its per-channel MAD noise path (``threshold_unit='mad'`` with no explicit
+        ``noise_levels``), which estimates noise from randomly sampled chunks;
+        the ``'uv'`` path and an explicit ``noise_levels`` are deterministic.
+        """
+        if sorter not in cls._NON_SI_SORTERS:
+            return True
+        return (
+            sorter_params.get("threshold_unit") == "mad"
+            and sorter_params.get("noise_levels") is None
+        )
+
+    @classmethod
     def insert_default(cls):
         """Insert v2 default sorter rows if missing.
 
@@ -1654,15 +1676,19 @@ class Sorting(SpyglassMixin, dj.Computed):
         # parallel computation that could drift.
         import spikeinterface as si
 
-        # reject_ambient_seed: a stochastic clustering sort's seed MUST live in
-        # the SorterParameters row (part of sorter_params_name -> sorting_id),
-        # never the ambient dj.config layer, or a later ambient-seed change
-        # would silently reuse this sort under an unchanged id. The deterministic
-        # in-process clusterless thresholder is exempt: its output does not
-        # depend on the seed, so an ambient seed cannot alias a different result.
+        # reject_ambient_seed: a seed-dependent sort's seed MUST live in the
+        # SorterParameters row (part of sorter_params_name -> sorting_id), never
+        # the ambient dj.config layer, or a later ambient-seed change would
+        # silently reuse this sort under an unchanged id. The clusterless
+        # thresholder is exempt ONLY on its deterministic paths -- its per-channel
+        # MAD noise estimate (threshold_unit='mad', no explicit noise_levels)
+        # samples random chunks and IS seed-dependent (see
+        # _is_seed_dependent_sort), so that path is NOT exempt.
         effective_random_seed = resolve_effective_seed(
             sorter_row["job_kwargs"],
-            reject_ambient_seed=sorter not in SorterParameters._NON_SI_SORTERS,
+            reject_ambient_seed=SorterParameters._is_seed_dependent_sort(
+                sorter, sorter_params
+            ),
         )
         spikeinterface_version = si.__version__
         sorter_version = sorter_distribution_version(sorter)
