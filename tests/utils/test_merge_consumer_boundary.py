@@ -13,7 +13,7 @@ raised a cryptic "Found N potential parents" from ``merge_get_parent``, and
 advertised API true:
 
   - ``multi_source=False`` (default) + a restriction spanning >1 source
-    raises a clear error.
+    warns and still fetches across all sources.
   - ``multi_source=True`` iterates source-by-source, scoping the parent
     resolution to one source per loop, and returns ``len(merge_ids) ==
     len(nwb_list)`` with each id the owner of its paired file.

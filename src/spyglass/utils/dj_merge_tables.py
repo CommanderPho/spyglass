@@ -611,7 +611,8 @@ class Merge(ExportMixin, dj.Manual):
         multi_source: bool
             Default False. Allow the restriction to span more than one source
             part type. When False (the default), a multi-source restriction
-            raises; when True, files are fetched source-by-source and (with
+            WARNS and still fetches across all sources; when True, the same
+            source-by-source fetch runs without the warning and (with
             ``return_merge_ids``) each merge_id aligns with its file.
         return_merge_ids: bool
             Default False. Return merge_ids with nwb files.
