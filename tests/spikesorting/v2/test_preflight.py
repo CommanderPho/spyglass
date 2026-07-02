@@ -74,8 +74,19 @@ def test_identity_payload_extraction_stable():
         "preprocessing_params_name": "default",
         "team_name": "pin_team",
     }
+    # recording_id folds in the resolved-input hash (membership + reference +
+    # interpolate bad-channels), which insert_selection / preflight resolve from
+    # the live sort group. This DB-free test pins the derivation with a FIXED
+    # hash so the folding + downstream (artifact/sorting) chain stay stable; the
+    # real-run match (preflight id == insert_selection id, real hash) is covered
+    # by the DB-tier round-trip test.
+    input_hash = "0" * 64
     recording_id = deterministic_id(
-        "recording", recording_identity_payload(cfg)
+        "recording",
+        {
+            **recording_identity_payload(cfg),
+            "recording_input_hash": input_hash,
+        },
     )
     artifact_detection_id = deterministic_id(
         "artifact_detection",
@@ -94,14 +105,14 @@ def test_identity_payload_extraction_stable():
     )
     # The literals derive from the dated catalog row names above
     # (preproc "default", artifact "default", sorter
-    # "franklab_30khz_ms5_2026_06"); correcting/renaming a shipped row
-    # changes every derived id, so these are regenerated -- not loosened --
-    # whenever the catalog names change.
-    assert recording_id == uuid.UUID("6264f54c-7315-518e-b86e-e83903725387")
+    # "franklab_30khz_ms5_2026_06") plus the fixed input_hash; correcting/
+    # renaming a shipped row or changing the id-folding changes every derived
+    # id, so these are regenerated -- not loosened -- when that happens.
+    assert recording_id == uuid.UUID("189a9ec3-d299-5450-8712-437aa56e2d68")
     assert artifact_detection_id == uuid.UUID(
-        "1364ddfe-466a-56ea-8f6a-12d122b523b7"
+        "aa3b4fbe-013c-583a-8da2-be359777d535"
     )
-    assert sorting_id == uuid.UUID("89b487d4-0b61-57d3-afbc-2d20521ec46c")
+    assert sorting_id == uuid.UUID("bfe079a9-98d4-5db6-9c2c-e52f68511407")
 
 
 @pytest.mark.unit

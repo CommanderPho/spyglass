@@ -675,6 +675,7 @@ def preflight_v2_pipeline(
         Recording,
         RecordingSelection,
         SortGroupV2,
+        resolve_recording_input_hash,
     )
     from spyglass.spikesorting.v2._recipe_catalog import (
         waveform_params_for_preprocessing,
@@ -774,7 +775,7 @@ def preflight_v2_pipeline(
         )
 
     # 6-8. The preset's parameter Lookup rows.
-    _check(
+    preprocessing_params_exist = _check(
         "preprocessing_params_exist",
         PreprocessingParameters
         & {"preprocessing_params_name": bundle.preprocessing_params_name},
@@ -967,78 +968,99 @@ def preflight_v2_pipeline(
             "applied for this run."
         )
 
-    # expected_ids: the deterministic selection PKs this run would produce.
-    # Pure hashes of (preset params + inputs) via the SAME payload builders
-    # insert_selection uses, so they cannot drift; computable once the
-    # preset resolves, regardless of whether the rows exist yet. ``exists``
-    # is a read-only & pk check.
-    recording_id = deterministic_id(
-        "recording",
-        recording_identity_payload(
-            {
-                "nwb_file_name": nwb_file_name,
-                "sort_group_id": sort_group_id,
-                "interval_list_name": interval_list_name,
-                "preprocessing_params_name": bundle.preprocessing_params_name,
-                "team_name": team_name,
-            }
-        ),
-    )
-    # A None artifact name means no artifact-detection pass: the sort's
-    # identity carries artifact_detection_id=None (matching
-    # build_sorting_selection_plan), so the expected sorting_id derives from
-    # None and there is no ArtifactDetectionSelection PK to expect.
-    if bundle.artifact_detection_params_name is None:
-        artifact_detection_id = None
+    # expected_ids: the deterministic selection PKs this run would produce, via
+    # the SAME payload builders insert_selection uses so they cannot drift.
+    # ``exists`` is a read-only & pk check. The recording_id folds in the
+    # resolved input hash (membership + reference + interpolate bad-channels)
+    # exactly as build_recording_selection_plan does, so preflight's expected id
+    # matches the id insert_selection will mint. That resolution reads the sort
+    # group and preprocessing-params rows, so the ids are only computable once
+    # those exist; when a blocking input is missing the run cannot proceed
+    # anyway, so leave expected_ids empty (as with an unknown preset) rather than
+    # raising a bare fetch1 that would mask the actionable missing-input check.
+    if not (sort_group_exists and preprocessing_params_exist):
+        expected_ids = {}
     else:
-        artifact_detection_id = deterministic_id(
-            "artifact_detection",
-            artifact_detection_identity_payload(
-                artifact_detection_params_name=bundle.artifact_detection_params_name,
+        recording_id = deterministic_id(
+            "recording",
+            {
+                **recording_identity_payload(
+                    {
+                        "nwb_file_name": nwb_file_name,
+                        "sort_group_id": sort_group_id,
+                        "interval_list_name": interval_list_name,
+                        "preprocessing_params_name": (
+                            bundle.preprocessing_params_name
+                        ),
+                        "team_name": team_name,
+                    }
+                ),
+                "recording_input_hash": resolve_recording_input_hash(
+                    nwb_file_name,
+                    sort_group_id,
+                    bundle.preprocessing_params_name,
+                ),
+            },
+        )
+        # A None artifact name means no artifact-detection pass: the sort's
+        # identity carries artifact_detection_id=None (matching
+        # build_sorting_selection_plan), so the expected sorting_id derives from
+        # None and there is no ArtifactDetectionSelection PK to expect.
+        if bundle.artifact_detection_params_name is None:
+            artifact_detection_id = None
+        else:
+            artifact_detection_id = deterministic_id(
+                "artifact_detection",
+                artifact_detection_identity_payload(
+                    artifact_detection_params_name=bundle.artifact_detection_params_name,
+                    recording_id=recording_id,
+                ),
+            )
+        sorting_id = deterministic_id(
+            "sorting",
+            sorting_identity_payload(
                 recording_id=recording_id,
+                sorter=bundle.sorter,
+                sorter_params_name=bundle.sorter_params_name,
+                artifact_detection_id=artifact_detection_id,
             ),
         )
-    sorting_id = deterministic_id(
-        "sorting",
-        sorting_identity_payload(
-            recording_id=recording_id,
-            sorter=bundle.sorter,
-            sorter_params_name=bundle.sorter_params_name,
-            artifact_detection_id=artifact_detection_id,
-        ),
-    )
-    # Per stage, ``exists`` is whether the SELECTION row exists (the run would
-    # reuse this PK) and ``computed_exists`` whether the COMPUTED output row
-    # exists (the populate already ran -- a reused, near-zero-cost stage).
-    # Distinguishing them tells a caller what work the run would actually do: a
-    # selection can exist with its output not yet populated.
-    expected_ids = {
-        "recording_id": {
-            "id": recording_id,
-            "exists": bool(RecordingSelection & {"recording_id": recording_id}),
-            "computed_exists": bool(Recording & {"recording_id": recording_id}),
-        },
-        "artifact_detection_id": (
-            {"id": None, "exists": False, "computed_exists": False}
-            if artifact_detection_id is None
-            else {
-                "id": artifact_detection_id,
+        # Per stage, ``exists`` is whether the SELECTION row exists (the run
+        # would reuse this PK) and ``computed_exists`` whether the COMPUTED
+        # output row exists (the populate already ran -- a reused, near-zero-cost
+        # stage). Distinguishing them tells a caller what work the run would
+        # actually do: a selection can exist with its output not yet populated.
+        expected_ids = {
+            "recording_id": {
+                "id": recording_id,
                 "exists": bool(
-                    ArtifactDetectionSelection
-                    & {"artifact_detection_id": artifact_detection_id}
+                    RecordingSelection & {"recording_id": recording_id}
                 ),
                 "computed_exists": bool(
-                    ArtifactDetection
-                    & {"artifact_detection_id": artifact_detection_id}
+                    Recording & {"recording_id": recording_id}
                 ),
-            }
-        ),
-        "sorting_id": {
-            "id": sorting_id,
-            "exists": bool(SortingSelection & {"sorting_id": sorting_id}),
-            "computed_exists": bool(Sorting & {"sorting_id": sorting_id}),
-        },
-    }
+            },
+            "artifact_detection_id": (
+                {"id": None, "exists": False, "computed_exists": False}
+                if artifact_detection_id is None
+                else {
+                    "id": artifact_detection_id,
+                    "exists": bool(
+                        ArtifactDetectionSelection
+                        & {"artifact_detection_id": artifact_detection_id}
+                    ),
+                    "computed_exists": bool(
+                        ArtifactDetection
+                        & {"artifact_detection_id": artifact_detection_id}
+                    ),
+                }
+            ),
+            "sorting_id": {
+                "id": sorting_id,
+                "exists": bool(SortingSelection & {"sorting_id": sorting_id}),
+                "computed_exists": bool(Sorting & {"sorting_id": sorting_id}),
+            },
+        }
 
     errors = [c.fix for c in checks if not c.ok]
     return PreflightReport(

@@ -468,16 +468,31 @@ def fresh_recording_identity(populated_sorting):
 @pytest.mark.slow
 @pytest.mark.integration
 def test_recording_selection_writes_deterministic_pk(fresh_recording_identity):
-    """``insert_selection`` writes the content-addressed id as the PK, and
-    a repeated call returns the same id with no second row."""
-    from spyglass.spikesorting.v2.recording import RecordingSelection
+    """``insert_selection`` writes the content-addressed id (FK set + resolved
+    input hash) as the PK, stores the hash on the row, and a repeated call
+    returns the same id with no second row."""
+    from spyglass.spikesorting.v2.recording import (
+        RecordingSelection,
+        resolve_recording_input_hash,
+    )
 
     identity = fresh_recording_identity
-    expected = deterministic_id("recording", identity)
+    input_hash = resolve_recording_input_hash(
+        identity["nwb_file_name"],
+        identity["sort_group_id"],
+        identity["preprocessing_params_name"],
+    )
+    expected = deterministic_id(
+        "recording", {**identity, "recording_input_hash": input_hash}
+    )
 
     pk = RecordingSelection.insert_selection(identity)
     assert pk == {"recording_id": expected}
     assert len(RecordingSelection & identity) == 1
+    # The resolved input fingerprint is snapshotted on the row.
+    assert (RecordingSelection & pk).fetch1(
+        "recording_input_hash"
+    ) == input_hash
 
     # Idempotent: same id, still one row.
     pk_again = RecordingSelection.insert_selection(dict(identity))
@@ -634,14 +649,30 @@ def test_recording_selection_rejects_single_nondeterministic_row(
     raises instead of silently adopting it as canonical.
     """
     from spyglass.spikesorting.v2.exceptions import DuplicateSelectionError
-    from spyglass.spikesorting.v2.recording import RecordingSelection
+    from spyglass.spikesorting.v2.recording import (
+        RecordingSelection,
+        resolve_recording_input_hash,
+    )
 
     identity = fresh_recording_identity
-    # One raw row with the SAME logical identity but a random PK. The master
-    # insert guard requires allow_direct_insert=True for this deliberate
-    # bypass (all FK targets exist, so no FK-checks-off needed).
+    # One raw row with the SAME logical identity (FK set + resolved input hash)
+    # but a random PK. The hash must match so the row shares the logical
+    # identity find-existing scopes to; without it the raw row would sit under a
+    # different identity axis and go undetected. The master insert guard requires
+    # allow_direct_insert=True for this deliberate bypass (all FK targets exist,
+    # so no FK-checks-off needed).
+    input_hash = resolve_recording_input_hash(
+        identity["nwb_file_name"],
+        identity["sort_group_id"],
+        identity["preprocessing_params_name"],
+    )
     RecordingSelection.insert1(
-        {**identity, "recording_id": uuid.uuid4()}, allow_direct_insert=True
+        {
+            **identity,
+            "recording_id": uuid.uuid4(),
+            "recording_input_hash": input_hash,
+        },
+        allow_direct_insert=True,
     )
 
     with pytest.raises(DuplicateSelectionError, match="non-deterministic"):
@@ -649,6 +680,66 @@ def test_recording_selection_rejects_single_nondeterministic_row(
     # The helper did NOT converge a second (deterministic) row on top.
     assert len(RecordingSelection & identity) == 1
     # (fixture teardown removes the planted row.)
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_make_fetch_rejects_input_hash_drift(fresh_recording_identity):
+    """``make_fetch`` raises ``RecordingInputDriftError`` when the live
+    sort-group inputs no longer match the ``recording_input_hash`` the row
+    carries -- the membership/reference/bad-channel set changed after the id was
+    minted. Exercised by planting a row with a deliberately wrong fingerprint
+    (a real drift produces the same mismatch), so the guard is proven without
+    mutating the shared sort group."""
+    from spyglass.spikesorting.v2.exceptions import RecordingInputDriftError
+    from spyglass.spikesorting.v2.recording import (
+        Recording,
+        RecordingSelection,
+    )
+
+    identity = fresh_recording_identity
+    wrong_hash = "f" * 64  # syntactically valid, cannot match the live inputs
+    rid = uuid.uuid4()
+    RecordingSelection.insert1(
+        {
+            **identity,
+            "recording_id": rid,
+            "recording_input_hash": wrong_hash,
+        },
+        allow_direct_insert=True,
+    )
+    with pytest.raises(RecordingInputDriftError, match="fingerprint"):
+        Recording().make_fetch({"recording_id": rid})
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_recording_input_hash_matches_make_fetch(populated_sorting):
+    """The hash ``insert_selection`` stored equals the one ``make_fetch``
+    re-derives for the SAME unchanged recording, so a normal populate never
+    false-drifts. Guards the ``resolve_recording_input_hash`` <-> ``make_fetch``
+    lock-step: if their input-reading logic diverged, this equality would
+    break (and a real recording would raise a spurious drift)."""
+    from spyglass.spikesorting.v2.recording import (
+        RecordingSelection,
+        resolve_recording_input_hash,
+    )
+    from spyglass.spikesorting.v2.sorting import SortingSelection
+
+    rec_id = (SortingSelection.RecordingSource & populated_sorting).fetch1(
+        "recording_id"
+    )
+    row = (RecordingSelection & {"recording_id": rec_id}).fetch1()
+    stored = row["recording_input_hash"]
+    # The pipeline created this recording via insert_selection, so it carries a
+    # fingerprint (never NULL).
+    assert stored is not None
+    live = resolve_recording_input_hash(
+        row["nwb_file_name"],
+        row["sort_group_id"],
+        row["preprocessing_params_name"],
+    )
+    assert live == stored
 
 
 @pytest.mark.slow

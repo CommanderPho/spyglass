@@ -482,6 +482,25 @@ class RecordingContentDriftError(RuntimeError):
     """
 
 
+class RecordingInputDriftError(RuntimeError):
+    """Raise when a recording's resolved construction inputs drifted post-select.
+
+    ``recording_id`` is content-addressed over the FK set PLUS
+    ``recording_input_hash`` -- the sort group's electrode membership, reference,
+    and (on the ``interpolate`` path) the resolved interior bad-channel set.
+    ``insert_selection`` snapshots that hash onto ``RecordingSelection``;
+    ``make_fetch`` re-derives it from the LIVE inputs and raises this when they
+    disagree -- an electrode was added/removed from the sort group, the reference
+    changed, or a channel was (un)flagged bad AFTER the selection was created, so
+    the recording ``make`` would build content that no longer matches the id it
+    was minted for. Because the inputs are IDENTITY (folded into ``recording_id``,
+    not merely snapshotted), recovery is to re-run ``insert_selection`` for the
+    current inputs -- which mints a NEW ``recording_id`` for the changed set --
+    or to restore the sort group's membership / bad-channel flags, not to
+    silently build a drifted recording under the old id.
+    """
+
+
 class MissingDisplayExtensionError(RuntimeError):
     """A richer SI widget needs display-safe analyzer extensions not present.
 

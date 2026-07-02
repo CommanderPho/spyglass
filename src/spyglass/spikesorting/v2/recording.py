@@ -47,6 +47,9 @@ from spyglass.spikesorting.v2._recording_nwb import (
 from spyglass.spikesorting.v2._recording_preprocessing import (
     apply_pre_motion_preprocessing,
 )
+from spyglass.spikesorting.v2._selection_identity import (
+    recording_input_hash,
+)
 
 # Aliased: the bare ``filtering_description`` name would be shadowed by the
 # ``filtering_description`` keyword-only param of the ``_write_nwb_artifact``
@@ -891,6 +894,73 @@ class PreprocessingParameters(ImmutableParamsLookup, SpyglassMixin, dj.Lookup):
         cls.insert(cls._DEFAULT_CONTENTS, skip_duplicates=True)
 
 
+def resolve_recording_input_hash(
+    nwb_file_name: str,
+    sort_group_id: int,
+    preprocessing_params_name: str,
+) -> str:
+    """Resolve + content-address a recording's live construction inputs.
+
+    Reads the SAME live inputs ``Recording.make_fetch`` builds the recording
+    from -- the sort group's electrode membership and reference, and (on the
+    ``interpolate`` bad-channel path) the resolved interior bad-channel set --
+    and returns their :func:`recording_input_hash`. Shared by
+    ``RecordingSelection.insert_selection`` and ``preflight_v2_pipeline`` so both
+    derive the identical ``recording_id``, and re-run by ``make_fetch`` to reject
+    a drift. Deliberately kept in lock-step with ``make_fetch``'s reads: a
+    divergence would mint an id ``make_fetch`` then rejects as a false drift,
+    which ``test_recording_input_hash_matches_make_fetch`` guards against.
+
+    Parameters
+    ----------
+    nwb_file_name : str
+        The raw NWB file.
+    sort_group_id : int
+        The sort group whose membership + reference are read.
+    preprocessing_params_name : str
+        Selects the ``PreprocessingParameters`` row whose
+        ``bad_channel_handling`` decides whether the interpolate bad-channel set
+        enters the content.
+
+    Returns
+    -------
+    str
+        The 64-char sha256 hex digest of the resolved inputs.
+    """
+    sort_group_key = {
+        "nwb_file_name": nwb_file_name,
+        "sort_group_id": int(sort_group_id),
+    }
+    channel_ids = sorted(
+        (SortGroupV2.SortGroupElectrode & sort_group_key).fetch("electrode_id"),
+        key=int,
+    )
+    reference_mode, reference_electrode_id = (
+        SortGroupV2 & sort_group_key
+    ).fetch1("reference_mode", "reference_electrode_id")
+    preprocessing_params = PreprocessingParamsSchema.model_validate(
+        (
+            PreprocessingParameters
+            & {"preprocessing_params_name": preprocessing_params_name}
+        ).fetch1("params")
+    )
+    interpolated_bad_channel_ids: tuple = ()
+    if preprocessing_params.bad_channel_handling == "interpolate":
+        interpolated_bad_channel_ids = fetch_interior_bad_channel_ids(
+            nwb_file_name, channel_ids
+        )
+    return recording_input_hash(
+        electrode_ids=channel_ids,
+        reference_mode=str(reference_mode),
+        reference_electrode_id=(
+            None
+            if reference_electrode_id is None
+            else int(reference_electrode_id)
+        ),
+        interpolated_bad_channel_ids=interpolated_bad_channel_ids,
+    )
+
+
 @schema
 class RecordingSelection(SelectionMasterInsertGuard, SpyglassMixin, dj.Manual):
     """One row per (raw, sort group, interval, preprocessing params, team).
@@ -909,6 +979,7 @@ class RecordingSelection(SelectionMasterInsertGuard, SpyglassMixin, dj.Manual):
     -> IntervalList
     -> PreprocessingParameters
     -> LabTeam
+    recording_input_hash = null : char(64)  # sha256 of resolved construction inputs, folded into recording_id and verified at make_fetch
     """
 
     @classmethod
@@ -947,6 +1018,9 @@ class RecordingSelection(SelectionMasterInsertGuard, SpyglassMixin, dj.Manual):
             ``{"recording_id": <uuid>}`` -- never a list, never the full
             row.
         """
+        from spyglass.spikesorting.v2._selection_identity import (
+            recording_identity_payload,
+        )
         from spyglass.spikesorting.v2._selection_plan import (
             build_recording_selection_plan,
         )
@@ -955,9 +1029,21 @@ class RecordingSelection(SelectionMasterInsertGuard, SpyglassMixin, dj.Manual):
             _is_duplicate_key_error,
         )
 
+        # Validate the FK set up front (clean errors before any DB read), then
+        # resolve the content-addressed input hash from the live sort-group
+        # inputs (membership + reference + interpolate bad-channels) so a changed
+        # input set mints a new recording_id rather than aliasing this one.
+        identity = recording_identity_payload(key)
+        input_hash = resolve_recording_input_hash(
+            identity["nwb_file_name"],
+            identity["sort_group_id"],
+            identity["preprocessing_params_name"],
+        )
         # Pure half: validate the FK set, derive the deterministic
         # recording_id, and shape the row to insert (steps 1 + 3 above).
-        plan = build_recording_selection_plan(key)
+        plan = build_recording_selection_plan(
+            key, recording_input_hash=input_hash
+        )
 
         existing = cls._find_existing_pk(
             plan.master_restriction, plan.recording_id
@@ -1311,6 +1397,37 @@ class Recording(SpyglassMixin, dj.Computed):
             bad_channel_ids = fetch_interior_bad_channel_ids(
                 nwb_file_name, channel_ids
             )
+        # Verify the recording's resolved construction inputs still match the
+        # content-addressed recording_input_hash the recording_id was minted
+        # from. A mismatch means the sort group's membership/reference or the
+        # interpolate bad-channel set changed after insert_selection, so building
+        # here would produce content that no longer matches recording_id. Rows
+        # with a NULL hash (an allow_direct_insert bypass, or a row predating the
+        # column) never recorded a fingerprint, so they opt out -- every
+        # insert_selection row carries one.
+        stored_input_hash = sel.get("recording_input_hash")
+        if stored_input_hash is not None:
+            live_input_hash = recording_input_hash(
+                electrode_ids=channel_ids,
+                reference_mode=reference_mode,
+                reference_electrode_id=reference_electrode_id,
+                interpolated_bad_channel_ids=bad_channel_ids,
+            )
+            if live_input_hash != stored_input_hash:
+                from spyglass.spikesorting.v2.exceptions import (
+                    RecordingInputDriftError,
+                )
+
+                raise RecordingInputDriftError(
+                    f"Recording {sel['recording_id']} was selected with input "
+                    f"fingerprint {stored_input_hash} but the live sort-group "
+                    f"inputs now hash to {live_input_hash}: the electrode "
+                    "membership, reference, or interpolate bad-channel set "
+                    "changed after insert_selection. Re-run insert_selection "
+                    "for the current inputs (it mints a new recording_id for "
+                    "the changed set), or restore the sort group's membership / "
+                    "bad-channel flags."
+                )
         return RecordingFetched(
             sel=sel,
             channel_ids=channel_ids,

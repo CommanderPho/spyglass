@@ -42,46 +42,86 @@ _FULL_REC = {
     "preprocessing_params_name": "default",
     "team_name": "test_team",
 }
+# A resolved recording_input_hash (the DB-side resolution is exercised in the
+# integration tests); here any fixed 64-hex value drives the pure shaping.
+_REC_HASH = "a" * 64
+_REC_HASH_2 = "b" * 64
 
 
 # ---------- build_recording_selection_plan ---------------------------------
 
 
 def test_recording_plan_shapes_master_row_and_restriction():
-    """A full FK set yields the identity restriction plus a master row that
-    carries the deterministic recording_id; the FK set IS the restriction."""
-    plan = build_recording_selection_plan(dict(_FULL_REC))
+    """A full FK set + resolved input hash yields the identity restriction
+    (FK set + hash) plus a master row carrying the deterministic recording_id;
+    the FK set + hash IS the find-existing restriction."""
+    plan = build_recording_selection_plan(
+        dict(_FULL_REC), recording_input_hash=_REC_HASH
+    )
     assert isinstance(plan.recording_id, uuid.UUID)
-    assert plan.master_restriction == _FULL_REC
-    assert plan.master_row == {**_FULL_REC, "recording_id": plan.recording_id}
+    assert plan.master_restriction == {
+        **_FULL_REC,
+        "recording_input_hash": _REC_HASH,
+    }
+    assert plan.master_row == {
+        **_FULL_REC,
+        "recording_input_hash": _REC_HASH,
+        "recording_id": plan.recording_id,
+    }
 
 
 def test_recording_plan_is_deterministic():
-    """Identical FK sets derive the identical recording_id."""
+    """Identical FK sets + hash derive the identical recording_id."""
     assert (
-        build_recording_selection_plan(dict(_FULL_REC)).recording_id
-        == build_recording_selection_plan(dict(_FULL_REC)).recording_id
+        build_recording_selection_plan(
+            dict(_FULL_REC), recording_input_hash=_REC_HASH
+        ).recording_id
+        == build_recording_selection_plan(
+            dict(_FULL_REC), recording_input_hash=_REC_HASH
+        ).recording_id
     )
+
+
+def test_recording_plan_input_hash_changes_recording_id():
+    """The resolved-input hash is folded into the identity: a changed input
+    set (a different hash under the SAME FK set) mints a different
+    recording_id. This is the OP-3/OP-4 honesty guarantee."""
+    id_a = build_recording_selection_plan(
+        dict(_FULL_REC), recording_input_hash=_REC_HASH
+    ).recording_id
+    id_b = build_recording_selection_plan(
+        dict(_FULL_REC), recording_input_hash=_REC_HASH_2
+    ).recording_id
+    assert id_a != id_b
 
 
 def test_recording_plan_rejects_unknown_field():
     """An extra (joined/fetched) field is rejected, not silently hashed into
     a different recording_id."""
     with pytest.raises(ValueError, match="unknown field"):
-        build_recording_selection_plan({**_FULL_REC, "analysis_file_name": "x"})
+        build_recording_selection_plan(
+            {**_FULL_REC, "analysis_file_name": "x"},
+            recording_input_hash=_REC_HASH,
+        )
 
 
 def test_recording_plan_requires_all_identity_fields():
     """A missing identity field raises rather than deriving a partial id."""
     incomplete = {k: v for k, v in _FULL_REC.items() if k != "team_name"}
     with pytest.raises(ValueError, match="requires field"):
-        build_recording_selection_plan(incomplete)
+        build_recording_selection_plan(
+            incomplete, recording_input_hash=_REC_HASH
+        )
 
 
 def test_recording_plan_accepts_matching_supplied_id():
     """An explicit recording_id equal to the derived id is accepted."""
-    det = build_recording_selection_plan(dict(_FULL_REC)).recording_id
-    plan = build_recording_selection_plan({**_FULL_REC, "recording_id": det})
+    det = build_recording_selection_plan(
+        dict(_FULL_REC), recording_input_hash=_REC_HASH
+    ).recording_id
+    plan = build_recording_selection_plan(
+        {**_FULL_REC, "recording_id": det}, recording_input_hash=_REC_HASH
+    )
     assert plan.recording_id == det
 
 
@@ -89,7 +129,10 @@ def test_recording_plan_rejects_mismatched_supplied_id():
     """An explicit recording_id that disagrees with the derived id raises."""
     wrong = uuid.UUID("99999999-9999-9999-9999-999999999999")
     with pytest.raises(ValueError):
-        build_recording_selection_plan({**_FULL_REC, "recording_id": wrong})
+        build_recording_selection_plan(
+            {**_FULL_REC, "recording_id": wrong},
+            recording_input_hash=_REC_HASH,
+        )
 
 
 # ---------- build_sorting_selection_plan -----------------------------------

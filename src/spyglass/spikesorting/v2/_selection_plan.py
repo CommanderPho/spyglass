@@ -100,15 +100,29 @@ class ArtifactDetectionSelectionPlan(NamedTuple):
     source_row: dict
 
 
-def build_recording_selection_plan(key: dict) -> RecordingSelectionPlan:
+def build_recording_selection_plan(
+    key: dict, *, recording_input_hash: str
+) -> RecordingSelectionPlan:
     """Validate a ``RecordingSelection`` request and build its insert plan.
 
     The logical identity is the full FK set (Raw, SortGroupV2, IntervalList,
-    PreprocessingParameters, LabTeam); the ``recording_id`` PK is content-
-    addressed from it via :func:`deterministic_id`. Field validation
-    (unknown-field rejection, required-field checks) is delegated to
-    :func:`recording_identity_payload`, the single source of truth shared
-    with ``preflight_v2_pipeline`` so the two cannot derive different ids.
+    PreprocessingParameters, LabTeam) PLUS ``recording_input_hash`` -- the
+    content-address of the recording's RESOLVED construction inputs (electrode
+    membership, reference, and the ``interpolate`` bad-channel set) that live
+    outside the FK set but shape the recording's content (see
+    :func:`recording_input_hash`). Folding it into the ``recording_id`` makes a
+    changed input set mint a NEW recording rather than silently aliasing (or
+    later failing to rebuild) an existing ``recording_id``. The caller resolves
+    the hash DB-side (the resolution needs the live ``SortGroupElectrode`` /
+    ``Electrode`` rows) and passes it here so this builder stays DB-free.
+
+    FK-field validation (unknown-field rejection, required-field checks) is
+    delegated to :func:`recording_identity_payload`, the single source of truth
+    shared with ``preflight_v2_pipeline``; the hash is folded in identically at
+    both sites so the two cannot derive different ids. The hash also enters
+    ``master_restriction`` so find-existing is scoped to the specific input set
+    -- two membership sets under one ``sort_group_id`` are distinct rows, not a
+    false "non-deterministic bypass".
 
     Raises
     ------
@@ -118,7 +132,11 @@ def build_recording_selection_plan(key: dict) -> RecordingSelectionPlan:
         if an explicit ``recording_id`` does not equal the derived
         deterministic id.
     """
-    master_restriction = recording_identity_payload(key)
+    identity_payload = recording_identity_payload(key)
+    master_restriction = {
+        **identity_payload,
+        "recording_input_hash": recording_input_hash,
+    }
     recording_id = deterministic_id("recording", master_restriction)
     assert_supplied_id_matches(
         key.get("recording_id"), recording_id, field="recording_id"
