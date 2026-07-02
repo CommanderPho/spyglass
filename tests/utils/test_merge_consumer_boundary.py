@@ -411,3 +411,102 @@ def test_delete_downstream_merge_shim_logs_not_raises(dj_conn):
         delete_downstream_merge(object())
 
     assert len(ActivityLog & log_restr) == before + 1
+
+
+@pytest.fixture(scope="module")
+def same_file_two_row_source(dj_conn, mini_dict):
+    """A merge master whose single source has TWO rows pointing at the SAME NWB
+    file, so ``return_merge_ids`` alignment must key off the parent PK, not the
+    (shared) file or a widened source restriction.
+    """
+    from spyglass.common import Nwbfile
+    from spyglass.utils import SpyglassMixin, _Merge
+
+    nwb_file_name = mini_dict["nwb_file_name"]
+
+    class LeafC(SpyglassMixin, dj.Manual):
+        definition = """
+        leaf_c_id: int
+        ---
+        -> Nwbfile
+        """
+        _nwb_table = Nwbfile
+
+    class PkAlignMerge(_Merge, SpyglassMixin):
+        definition = """
+        merge_id: uuid
+        ---
+        source: varchar(32)
+        """
+
+        class LeafC(SpyglassMixin, dj.Part):  # noqa: F811
+            definition = """
+            -> master
+            ---
+            -> LeafC
+            """
+
+    context = {
+        "Nwbfile": Nwbfile,
+        "LeafC": LeafC,
+        "PkAlignMerge": PkAlignMerge,
+    }
+    # Schema name must NOT embed the master's table_name ("pk_align_merge").
+    schema = dj.Schema(
+        "test_merge_pkalign", context=context, connection=dj_conn
+    )
+    for table in (LeafC, PkAlignMerge):
+        schema(table)
+
+    import sys
+
+    _mod = sys.modules[__name__]
+    _mod.LeafC = LeafC
+
+    # Two source rows, SAME nwb_file_name -> a file-keyed id lookup is ambiguous.
+    LeafC().insert1({"leaf_c_id": 0, "nwb_file_name": nwb_file_name})
+    LeafC().insert1({"leaf_c_id": 1, "nwb_file_name": nwb_file_name})
+    PkAlignMerge().insert(
+        [{"leaf_c_id": 0, "nwb_file_name": nwb_file_name}], part_name="LeafC"
+    )
+    PkAlignMerge().insert(
+        [{"leaf_c_id": 1, "nwb_file_name": nwb_file_name}], part_name="LeafC"
+    )
+    merge_id_0 = (PkAlignMerge.LeafC & {"leaf_c_id": 0}).fetch1("merge_id")
+
+    yield {
+        "Merge": PkAlignMerge,
+        "merge_id_0": merge_id_0,
+        "nwb_file_name": nwb_file_name,
+    }
+
+    prev = dj.logger.level
+    dj.logger.setLevel("ERROR")
+    schema.drop(force=True)
+    dj.logger.setLevel(prev)
+    if hasattr(_mod, "LeafC"):
+        delattr(_mod, "LeafC")
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_fetch_nwb_string_return_merge_ids_aligns_by_parent_pk(
+    same_file_two_row_source,
+):
+    """A string restriction + return_merge_ids resolves the CORRECT merge_id even
+    when two rows in the source share an NWB file.
+
+    The string fallback must align each file's merge_id by the parent PK (the
+    parent-attribute branch's method), not by the shared file against a widened
+    source restriction (``extract_merge_id(str) == True``) -- which would match
+    both rows and make fetch1 raise or mis-pick.
+    """
+    Merge = same_file_two_row_source["Merge"]
+    # Precondition: the ambiguity is real -- two merge rows, one shared file.
+    assert len(Merge()) == 2
+
+    nwb_list, merge_ids = Merge().fetch_nwb(
+        "leaf_c_id = 0", return_merge_ids=True
+    )
+    assert len(nwb_list) == 1
+    assert merge_ids == [same_file_two_row_source["merge_id_0"]]
