@@ -3,19 +3,29 @@
 Problems that are blocked on information or a judgment call, parked here so the
 fix work can proceed without them. Revisit after the P1–P4 fixes land.
 
-**Still open:** OP-1 (`UnitAnnotation` migration), OP-3 (`bad_channel` id).
-**Resolved:** OP-2 (SI `nn_noise_overlap` sparse bug) — moved to the decision log
-at the bottom; one follow-up remains (file the upstream SI issue). IDs are kept
-stable because they are referenced from commits and the memory index.
+**Still open:** OP-1 — but only the *migration* decision (A vs B); the cheap
+actionable-error improvement shipped (2026-07-02, commit `711488b9`).
+**Resolved:** OP-2 (SI `nn_noise_overlap` sparse bug — in the decision log at the
+bottom) and OP-3 (`recording_id` honesty — the `bad_channel` id, with the
+sort-group-membership adjacent issue OP-4 folded into the same fix — marked
+**RESOLVED** in its section below, its write-up kept as the decision record).
+IDs are kept stable because they are referenced from commits and the memory index.
 
 ---
 
 ## OP-1 — `UnitAnnotation` positional → true unit-id migration (finding #5 / decision D2)
 
-**Status:** DEFERRED — decide after the other fixes. Needs one fact about the
-lab's data (see "Decisive question") plus a policy choice (A vs B below).
-**Blocks:** fix_plan Commit 3 (finding #5). Related: finding #21 / decision D4
-(`fetch_unit_spikes` multi-source policy) — also touches this file.
+**Status:** the cheap improvement is DONE (2026-07-02, commit `711488b9`): the
+bare `KeyError` is now an actionable `ValueError` naming the valid id set and the
+positional→true-id change, via the DB-free `spikes_for_requested_units` helper
+(unit-tested; the v1 integration test is JAX-skipped). What REMAINS deferred is
+the one-time **migration** (A vs B) — owner direction for pre-production is:
+keep true-id semantics, surface the mismatch loudly (done), document that old
+positional annotations are unsupported / must be migrated manually, and skip the
+migration script UNLESS the lab DB has known production positional annotations on
+merged curations (the decisive question below).
+**Blocks:** nothing now (the loud-error path shipped). Related: finding #21 /
+decision D4 (`fetch_unit_spikes` multi-source policy) — also touches this file.
 
 ### What the PR changed
 It flipped the *meaning* of `UnitAnnotation.unit_id` in **shared, production v1**
@@ -70,25 +80,59 @@ in a DB worth preserving? If never → **A**. If yes / unsure → **B**.
 ### Proposed next step
 Write a **read-only probe** to measure instead of guess: for every `UnitAnnotation`
 row, load the backing NWB, test whether the unit-id set is non-contiguous, and
-bucket each row as *safe* (contiguous), *would-KeyError*, or
-*would-silently-misattribute*. Run it against the **lab DB** (the local Colima DB
-has no production rows). The counts decide A vs B.
+bucket each row as *safe* (contiguous) or *ambiguous / silent-risk* (non-contiguous
+— an old positional row and a new true-id row are **indistinguishable by value**,
+so a non-contiguous row can only be flagged as at-risk, not definitively
+mis-attributing). Run it against the **lab DB** (the local Colima DB has no
+production rows). The counts decide A vs B.
 
-Regardless of A/B, one cheap improvement is unconditional: replace the bare
-`KeyError` at [unit_annotation.py:156](src/spyglass/spikesorting/analysis/v1/unit_annotation.py#L156)
-with a `dict.get` + actionable error that names the valid id set and explains the
-positional→true-id change.
+Done (unconditional, shipped): the bare `KeyError` at
+[unit_annotation.py](src/spyglass/spikesorting/analysis/v1/unit_annotation.py) is
+now an actionable `ValueError` (helper `spikes_for_requested_units`) that names
+the valid id set and explains the positional→true-id change.
 
 ---
 
-## OP-3 — `bad_channel_handling='interpolate'` set is not in `recording_id` (finding #28)
+## OP-3 — `bad_channel_handling='interpolate'` set is not in `recording_id` (finding #28), + OP-4 sort-group membership
 
-**Status:** DEFERRED — touches content-addressing / identity, so it needs a
-deliberate design choice (and, under the frozen-schema policy, awareness that it
-re-hashes affected recordings). Parked here rather than fixed inline.
+**Status:** RESOLVED (2026-07-02) via **Option A (fold into the id)** — owner
+decision, and a conscious pre-GA override of the 2026-07-01 schema freeze, safe
+because the lab DB has no v2 data yet (owner-confirmed). The adjacent issue
+**OP-4** (Eric's review: `SortGroupV2.SortGroupElectrode` membership is live-
+mutable behind a stable `recording_id`, read at
+[recording.py:1211](src/spyglass/spikesorting/v2/recording.py#L1211)) is the SAME
+"live recording input absent from identity" pattern and is folded into the SAME
+fix — one hash covers membership, reference, and the interpolate bad-channel set.
+
+**Fix shipped (commits `024e7380`, `2444fe68`, `779a112b`):**
+- `recording_input_hash` (pure, DB-free, in `_selection_identity`) content-
+  addresses the resolved inputs (electrode membership + reference +, on
+  `interpolate`, the resolved interior bad-channel set); order-independent,
+  sensitive to every input.
+- `resolve_recording_input_hash` (DB-side, `recording.py`) resolves those live
+  inputs; shared by `insert_selection` and `preflight` so both derive the same
+  id, and re-run by `make_fetch` for a drift check.
+- `RecordingSelection` gains a nullable `recording_input_hash char(64)`;
+  `build_recording_selection_plan` folds it into `recording_id` AND the
+  find-existing restriction, so a changed input set mints a NEW recording rather
+  than aliasing or later failing to rebuild.
+- `make_fetch` raises `RecordingInputDriftError` when the live inputs no longer
+  match the stored hash (inputs changed after selection).
+- The `SortGroupV2.update1` reference guard's now-false rationale (it claimed the
+  reference is NOT in `recording_id`) was corrected, and the two recording tests
+  that reused one `recording_id` across a reference change were rewritten to the
+  new "reference change → distinct id" model.
+- Verified across unit + selection-identity integration + preflight + core
+  recording + full pipeline + concat suites (all green).
+
+This is the honest content-addressed fix (Option A). Option B (snapshot + drift
+only, id stable) was the alternative but Option A was chosen: pre-production is
+the right time to make the id honest.
+
 **Location:** [_selection_identity.py:41](src/spyglass/spikesorting/v2/_selection_identity.py#L41)
 (`RECORDING_IDENTITY_FIELDS`). Same "output-affecting input absent from the id"
-pattern as the ambient seed (F9), which is why the pattern sweep surfaced it.
+pattern as the ambient seed (F9), which is why the pattern sweep surfaced it. The
+problem write-up below is kept as the decision record.
 
 ### The problem
 On the `bad_channel_handling='interpolate'` path, the recording's content is
