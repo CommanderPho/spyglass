@@ -236,3 +236,67 @@ def test_sorted_spikes_group_fetch_spike_data_spans_sources(
     assert len(spike_times) >= 3
 
     (SortedSpikesGroup & group_key).super_delete(warn=False)
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_unit_annotation_hard_blocks_multi_source(two_source_output):
+    """UnitAnnotation.fetch_unit_spikes raises on a restriction spanning >1
+    SpikeSortingOutput source, but a single-source restriction still fetches.
+
+    Merge.fetch_nwb now only WARNS on a multi-source restriction (it used to
+    raise), so annotations -- which are single-analysis by design -- carry the
+    hard block in fetch_unit_spikes itself. Unlike SortedSpikesGroup (above),
+    which intentionally spans sources, UnitAnnotation must not silently mix
+    spike-time namespaces.
+    """
+    from spyglass.spikesorting.analysis.v1.group import (
+        _get_nwb_unit_ids,
+        _get_spike_obj_name,
+    )
+    from spyglass.spikesorting.analysis.v1.unit_annotation import (
+        UnitAnnotation,
+    )
+    from spyglass.spikesorting.spikesorting_merge import SpikeSortingOutput
+
+    ctx = two_source_output
+
+    def _valid_unit_id(merge_id):
+        nwb = (SpikeSortingOutput & {"merge_id": merge_id}).fetch_nwb()[0]
+        field = _get_spike_obj_name(nwb)
+        return int(sorted(_get_nwb_unit_ids(nwb, field))[0])
+
+    ua = UnitAnnotation()
+    inserted = []
+    try:
+        for mid in (ctx["mid_v2"], ctx["mid_imported"]):
+            unit_id = _valid_unit_id(mid)
+            ua.add_annotation(
+                {
+                    "spikesorting_merge_id": mid,
+                    "unit_id": unit_id,
+                    "annotation": "cell_type",
+                    "label": "test",
+                },
+                skip_duplicates=True,
+            )
+            inserted.append({"spikesorting_merge_id": mid, "unit_id": unit_id})
+
+        # Single source: the guard must NOT false-raise -- spikes are returned.
+        single = (
+            UnitAnnotation & {"spikesorting_merge_id": ctx["mid_v2"]}
+        ).fetch_unit_spikes()
+        assert len(single) >= 1
+
+        # Two sources: hard-blocked with an actionable error.
+        with pytest.raises(ValueError, match="multiple SpikeSortingOutput"):
+            (
+                UnitAnnotation
+                & [
+                    {"spikesorting_merge_id": ctx["mid_v2"]},
+                    {"spikesorting_merge_id": ctx["mid_imported"]},
+                ]
+            ).fetch_unit_spikes()
+    finally:
+        for key in inserted:
+            (UnitAnnotation & key).delete(safemode=False)
