@@ -178,12 +178,55 @@ jobs:
     # tests run DB-free; DB-tier tests (fixture ingestion, legacy-runtime
     # boundary) connect to the MySQL service via the conftest's
     # null_server path.
-    name: pytest-v2 (SpikeInterface 0.104)
+    name: pytest-v2 ${{ matrix.shard.name }} (SpikeInterface 0.104)
     # Skip if PR is closed but not merged
     if: |-
       github.event_name != 'pull_request' ||
       github.event.action != 'closed' ||
       github.event.pull_request.merged == true
+    # Shard the ~1760-test v2 suite so no single job runs long enough to hit the
+    # runner limit or a mid-run MySQL connection death (the unsharded job took
+    # ~1h45m). fail-fast: false so one shard's failure does not cancel the
+    # others. Balanced by RUNTIME, not test count: the single-session sorts and
+    # the cross-session / concat / recompute integration tests dominate
+    # wall-clock and each get a shard; the ``unit`` shard runs the many fast
+    # DB-free + light-DB tests AND any file not routed above. The two heavy
+    # separate-env lanes (matching, figpack) each run in ONE shard (see their
+    # ``if:`` guards below) so the matrix does not triple them. Adding a new
+    # HEAVY (full-sort) test file? Add it to the ``integration`` shard's paths
+    # AND to the ``unit`` shard's --ignore list.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - name: single-session
+            paths: tests/spikesorting/v2/single_session
+          - name: integration
+            paths: >-
+              tests/spikesorting/v2/test_unitmatch.py
+              tests/spikesorting/v2/test_session_group_concat.py
+              tests/spikesorting/v2/test_recompute.py
+              tests/spikesorting/v2/test_curation_evaluation.py
+              tests/spikesorting/v2/test_analyzer_lifecycle.py
+              tests/spikesorting/v2/test_pipeline_session.py
+              tests/spikesorting/v2/test_downstream_consumers.py
+              tests/spikesorting/v2/test_clusterless_waveform_features.py
+              tests/spikesorting/v2/test_fixture_ingestion.py
+              tests/spikesorting/v2/test_brain_region_attribution.py
+          - name: unit
+            paths: >-
+              tests/spikesorting/v2
+              --ignore=tests/spikesorting/v2/single_session
+              --ignore=tests/spikesorting/v2/test_unitmatch.py
+              --ignore=tests/spikesorting/v2/test_session_group_concat.py
+              --ignore=tests/spikesorting/v2/test_recompute.py
+              --ignore=tests/spikesorting/v2/test_curation_evaluation.py
+              --ignore=tests/spikesorting/v2/test_analyzer_lifecycle.py
+              --ignore=tests/spikesorting/v2/test_pipeline_session.py
+              --ignore=tests/spikesorting/v2/test_downstream_consumers.py
+              --ignore=tests/spikesorting/v2/test_clusterless_waveform_features.py
+              --ignore=tests/spikesorting/v2/test_fixture_ingestion.py
+              --ignore=tests/spikesorting/v2/test_brain_region_attribution.py
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -310,7 +353,7 @@ jobs:
       # manual dispatch=+scenario fixtures + REQUIRE), so a manual dispatch is
       # always the most thorough v2 run; there is no fast v2 lane by design.
       run: |
-        pytest tests/spikesorting/v2/ --no-docker --no-dlc -q
+        pytest ${{ matrix.shard.paths }} --no-docker --no-dlc -q
     # --- Matching-extra resolver-evidence job.
     # Runs in a SEPARATE conda env (the matching extra pulls torch +
     # CUDA; kept out of the default v2 env for weight, not numpy). The
@@ -318,6 +361,10 @@ jobs:
     # import gates -- if a future UnitMatchPy re-forces numpy<2 (as
     # 3.2.8+ did), the assertion fires and the resolver ticket re-opens.
     - name: Matching-extra resolver evidence (separate env)
+      # Heavy separate-env lane: runs in ONE shard only (unit) so the matrix
+      # does not build its conda env + run the matcher suite three times. The
+      # unit shard's own slice is the lightest, leaving room for this lane.
+      if: matrix.shard.name == 'unit'
       env:
         # Promotes the test's "extras not importable" branch from
         # ``pytest.skip`` to ``pytest.fail``. The install step below
@@ -382,6 +429,9 @@ jobs:
     # tests build a real v2 analyzer, so they reach the run-tests MySQL service
     # via --no-docker and need the smoke fixture, like the matcher lane.
     - name: FigPack curation tests (separate env)
+      # Heavy separate-env lane: runs in ONE shard only (single-session) so the
+      # matrix does not build its conda env + run the figpack suite three times.
+      if: matrix.shard.name == 'single-session'
       run: |
         conda create -y -n spyglass_v2_curation python=3.11
         # NO ``|| true``: a failed curation install must fail the step. The
