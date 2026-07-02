@@ -1750,9 +1750,9 @@ class CurationV2(FactoryOnlyMaster, SpyglassMixin, dj.Manual):
         ``@classmethod`` so the merge-table dispatcher's
         ``source_table.get_recording(merge_key)`` call (which binds
         the part class, not an instance) resolves correctly for v2
-        ``merge_id``s. Without this method, the dispatcher at
-        ``spikesorting_merge.py:317`` raises ``AttributeError`` on
-        every v2 ``merge_id``.
+        ``merge_id``s. Without this method, the merge dispatcher
+        ``SpikeSortingOutput.get_recording`` raises ``AttributeError``
+        on every v2 ``merge_id``.
 
         ``key`` is normalized through a DataJoint restriction so it
         accepts both the single-dict form (``{"sorting_id": ...}``)
@@ -2593,8 +2593,8 @@ class CurationV2(FactoryOnlyMaster, SpyglassMixin, dj.Manual):
         concat brain-region anchor, the anchor member's regions may differ from
         later members if the probe re-anatomized across sessions.
 
-        ``@classmethod`` so the merge-table dispatcher at
-        ``spikesorting_merge.py:346`` (which calls
+        ``@classmethod`` so the merge-table dispatcher
+        ``SpikeSortingOutput.get_sort_group_info`` (which calls
         ``source_table.get_sort_group_info(merge_key)`` with the
         bound part *class*, not an instance) does not raise
         ``TypeError`` on v2 ``merge_id``s.

@@ -500,8 +500,7 @@ def _base_intervals_from_timestamps(timestamps, fs):
     for the common single-interval case.
 
     The ``1.5 / fs`` threshold is robust against sub-sample timestamp
-    jitter (within-chunk diffs are ~1 sample period) and matches the
-    ±1.5-sample tolerance used in the spike-time readback; any genuine
+    jitter (within-chunk diffs are ~1 sample period); any genuine
     disjoint gap is orders of magnitude larger.
 
     Parameters

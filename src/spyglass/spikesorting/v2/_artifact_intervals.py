@@ -51,7 +51,7 @@ def scan_artifact_frames(recording, validated, job_kwargs=None):
     by the chunk size -- roughly ``4 × chunk_frames × n_channels × 4 bytes`` (raw
     int slice + float32 µV copy + abs + z-score intermediate) -- rather than
     by the full recording, which a full-``get_traces`` load would
-    materialize at ``~4 × n_samples × n_channels × 4 bytes`` (≈27 GB for a
+    materialize at ``~4 × n_samples × n_channels × 4 bytes`` (≈110 GB for a
     1-hour 64-channel 30 kHz recording). Returning run RANGES (not one index per
     flagged frame) also bounds the collected result to the number of artifact
     EVENTS, so even a heavily-flagged recording never materializes an
