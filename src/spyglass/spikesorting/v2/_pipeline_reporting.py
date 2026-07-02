@@ -922,6 +922,11 @@ _RUN_COLUMNS = [
 _RUN_STAGE_ORDER = (
     "recording",
     "artifact_detection",
+    # Concat-mode source stages run BEFORE sorting (a single-session run has
+    # recording/artifact_detection instead; the receipt lists only the stages a
+    # run actually has), so order them here to keep the receipt chronological.
+    "member_recording",
+    "concat_recording",
     "sorting",
     "curation",
     "merge",

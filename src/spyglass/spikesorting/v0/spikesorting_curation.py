@@ -589,7 +589,15 @@ class MetricParameters(SpyglassMixin, dj.Manual):
         """Log available metrics and their descriptions"""
         for metric in _metric_name_to_func:
             if metric in self.available_metrics:
-                metric_doc = _metric_name_to_func[metric].__doc__.split("\n")[0]
+                func = _metric_name_to_func[metric]
+                if func is None:
+                    # The metric's SpikeInterface callable is absent on this SI
+                    # version; report it rather than crash on ``None.__doc__``.
+                    logger.info(
+                        f"{metric} : (unavailable on this SpikeInterface)\n"
+                    )
+                    continue
+                metric_doc = (func.__doc__ or "").split("\n")[0]
                 metric_string = ("{metric_name} : {metric_doc}").format(
                     metric_name=metric, metric_doc=metric_doc
                 )
