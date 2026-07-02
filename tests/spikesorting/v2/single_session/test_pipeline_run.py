@@ -1198,6 +1198,12 @@ def test_run_v2_pipeline_auto_curate_materializes_child(polymer_smoke_session):
     # metric column, which the structural assertions above cannot.
     metrics = CurationEvaluation.get_metrics(eval_key)
     assert "nn_noise_overlap" in metrics.columns
+    # Guard against a silently-inert metric: if every nn_noise_overlap is NaN
+    # (e.g. the templates 'median' operator or the SI sparse fix regressed), the
+    # expected/actual sets below would both be empty and this test would pass
+    # vacuously while auto-curation flags nothing. Require at least one real
+    # (finite) value so the rule is actually exercised.
+    assert metrics["nn_noise_overlap"].notna().any()
     expected_flagged = set()
     for uid in metrics.index:
         value = metrics.loc[uid, "nn_noise_overlap"]

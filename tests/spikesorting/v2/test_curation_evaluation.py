@@ -564,6 +564,42 @@ def test_curation_evaluation_pc_eval_records_both_roles(
     assert "source_analyzer_hash:display" not in drift["reasons"]
 
 
+def test_nn_noise_overlap_is_finite_not_silently_all_nan(
+    populated_sorting_with_curation, curation_evaluation_defaults
+):
+    """nn_noise_overlap must be a real (finite) metric, not silently all-NaN.
+
+    SI 0.104's nearest_neighbors_noise_overlap requires a ``median`` template
+    operator. If the whitened metric analyzer builds ``templates`` without it,
+    SI swallows the per-unit error and every ``nn_noise_overlap`` is NaN -- so
+    the shipped auto-curation noise/reject rules (which threshold
+    ``nn_noise_overlap``) silently fire on nothing. Assert, independent of any
+    persisted/derived value, that at least one unit has a finite
+    ``nn_noise_overlap`` so an all-NaN regression fails loudly rather than
+    passing as "no units flagged".
+    """
+    from spyglass.spikesorting.v2.metric_curation import (
+        CurationEvaluation,
+        CurationEvaluationSelection,
+    )
+
+    sel = CurationEvaluationSelection.insert_selection(
+        {
+            **populated_sorting_with_curation,
+            "metric_params_name": "franklab_default",
+            "auto_curation_rules_name": "none",
+        }
+    )
+    CurationEvaluation.populate(sel, reserve_jobs=False)
+    metrics = CurationEvaluation.get_metrics(sel)
+    assert "nn_noise_overlap" in metrics.columns
+    assert metrics["nn_noise_overlap"].notna().any(), (
+        "nn_noise_overlap is all-NaN: the whitened metric analyzer's "
+        "'templates' extension is missing the 'median' operator that SI's "
+        "nearest_neighbors_noise_overlap requires."
+    )
+
+
 def _two_distinct_template_inputs():
     """A 4-channel recording + two-unit and merged sortings, distinct templates.
 

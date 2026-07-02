@@ -2242,6 +2242,30 @@ class CurationEvaluation(SpyglassMixin, dj.Computed):
                     "analyzer was provided -- make_compute must build it when "
                     "PC metrics are requested."
                 )
+            # nn_noise_overlap needs a 'median' template AND SI 0.104.3's metric
+            # is broken for sparse analyzers (it derives the peak channel from a
+            # dense median but indexes the sparse noise cluster -> IndexError,
+            # swallowed as NaN). Ensure the median operator, then install the
+            # sparse fix. The PC compute below runs n_jobs=1 so the fix (a
+            # main-process monkeypatch) is the code that actually runs.
+            from spyglass.spikesorting.v2._si_metric_patches import (
+                patch_nn_noise_overlap_sparsity,
+            )
+
+            ensure_extensions(
+                metric_analyzer, ["templates"], job_kwargs=job_kwargs
+            )
+            templates_operators = list(
+                metric_analyzer.get_extension("templates").params.get(
+                    "operators"
+                )
+                or []
+            )
+            if "median" not in templates_operators:
+                metric_analyzer.compute(
+                    "templates", operators=[*templates_operators, "median"]
+                )
+            patch_nn_noise_overlap_sparsity()
             # Enforce the pinned PCA params even if a stale/manual analyzer
             # already carries principal_components computed with different ones
             # (ensure_extensions skips a present extension without checking its
@@ -2277,6 +2301,11 @@ class CurationEvaluation(SpyglassMixin, dj.Computed):
                 # As above: compute only this row's PC metrics, never inherit a
                 # prior curation's stored quality_metrics on this analyzer.
                 delete_existing_metrics=True,
+                # nn_noise_overlap's sparse fix (patch_nn_noise_overlap_sparsity)
+                # is a main-process monkeypatch; SI parallelises nn_advanced with
+                # spawned workers that re-import SI and would not see it, so pin
+                # the PC/NN metric compute to the main process.
+                n_jobs=1,
             )
             pc_df.index = pc_df.index.astype(int)
             frames.append(pc_df)
