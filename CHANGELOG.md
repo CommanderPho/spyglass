@@ -1004,23 +1004,23 @@ cross-referenced here, not duplicated.
 
 - `SpikeSorterParameters.sorter_param_name` → `SorterParameters.sorter_params_name`
   (column gained an `s`):
-  [sorting.py:108-115](./src/spyglass/spikesorting/v2/sorting.py#L108-L115).
+  [sorting.py](./src/spyglass/spikesorting/v2/sorting.py).
   v1 code restricting `{"sorter_param_name": "..."}` returns empty on v2.
 - `apply_merges` kwarg → `apply_merge` (singular) on
   `CurationV2.insert_curation`:
-  [curation.py:220](./src/spyglass/spikesorting/v2/curation.py#L220).
+  [curation.py](./src/spyglass/spikesorting/v2/curation.py).
 - **`insert_curation` raises on a re-passed root curation.** When a
   root curation (`parent_curation_id=-1`) already exists for a sorting,
   v2 still reuses it (idempotent, like v1), but if the caller ALSO
   passes non-default `labels` / `merge_groups` / `description` those
   would be silently ignored, so v2 raises `ValueError` instead of
   returning the existing row (v1 silently returned)
-  ([curation.py:391-414](./src/spyglass/spikesorting/v2/curation.py#L391-L414)).
+  ([curation.py](./src/spyglass/spikesorting/v2/curation.py)).
   Pass `reuse_existing=True` to reuse the root anyway, or curate as a
   child with `parent_curation_id=<existing root curation_id>`.
 - Preprocessing field renames `frequency_min`/`frequency_max` →
   `freq_min`/`freq_max`:
-  [_params/preprocessing.py:22-23](./src/spyglass/spikesorting/v2/_params/preprocessing.py#L22-L23).
+  [_params/preprocessing.py](./src/spyglass/spikesorting/v2/_params/preprocessing.py).
 - Franklab MS4 `SorterParameters` rows are rate-keyed dated rows:
   `franklab_30khz_ms4_2026_06` / `franklab_20khz_ms4_2026_06`. MS4 runs
   `filter=False`, so the row is region-agnostic — only the snippet window
@@ -1039,7 +1039,7 @@ cross-referenced here, not duplicated.
   per sorter.
 - `SorterParameters.insert_default()` ships fewer rows out of the box than
   v1: it gates each default row on `spikeinterface.sorters.installed_sorters()`
-  ([sorting.py:266-321](./src/spyglass/spikesorting/v2/sorting.py#L266-L321))
+  ([sorting.py](./src/spyglass/spikesorting/v2/sorting.py))
   rather than auto-inserting a `('<sorter>','default')` row for every
   `available_sorters()` entry (v1) — uninstalled-wrapper rows would only
   fail at populate. Use `insert_default_legacy_si_sorters()` (below) to
@@ -1066,16 +1066,16 @@ cross-referenced here, not duplicated.
 - Artifact `IntervalList.interval_list_name` is now prefixed
   `artifact_detection_{uuid}` (was a bare `str(uuid)`); use
   `parse_artifact_detection_interval_list_name` for backward-compatible lookup
-  ([utils.py:576-611](./src/spyglass/spikesorting/v2/utils.py#L576-L611)).
+  ([utils.py](./src/spyglass/spikesorting/v2/utils.py)).
 - `Sorting.time_of_sort` is a native `datetime`, not Unix int seconds
-  ([sorting.py:684](./src/spyglass/spikesorting/v2/sorting.py#L684)).
+  ([sorting.py](./src/spyglass/spikesorting/v2/sorting.py)).
   Consumers comparing against `int(time.time())` must cast.
 - Object-ID columns widened `varchar(40)` → `varchar(72)` on `Sorting`
-  ([sorting.py:681](./src/spyglass/spikesorting/v2/sorting.py#L681)) and
+  ([sorting.py](./src/spyglass/spikesorting/v2/sorting.py)) and
   `CurationV2`
-  ([curation.py:109](./src/spyglass/spikesorting/v2/curation.py#L109)).
+  ([curation.py](./src/spyglass/spikesorting/v2/curation.py)).
 - `description` widened `varchar(100)` → `varchar(255)` on `CurationV2`
-  ([curation.py:112](./src/spyglass/spikesorting/v2/curation.py#L112)).
+  ([curation.py](./src/spyglass/spikesorting/v2/curation.py)).
 - `MetricCuration` is replaced by `CurationEvaluation`; v1 `BurstPair` plotting
   helpers are folded into `CurationEvaluation` while the stored per-pair
   `BurstPairUnit` metrics remain v1-only. `RecordingRecompute` is replaced by
@@ -1087,23 +1087,23 @@ cross-referenced here, not duplicated.
 
 - `ClusterlessThresholderSchema().noise_levels` default changed from
   `[1.0]` to `None` ("let SI compute per-channel MAD")
-  ([_params/sorter.py:142-184](./src/spyglass/spikesorting/v2/_params/sorter.py#L142-L184)).
+  ([_params/sorter.py](./src/spyglass/spikesorting/v2/_params/sorter.py)).
   The shipped `default` Lookup row still carries `noise_levels=[1.0]`
   for v1 production parity
-  ([sorting.py:249](./src/spyglass/spikesorting/v2/sorting.py#L249));
+  ([sorting.py](./src/spyglass/spikesorting/v2/sorting.py));
   only the schema field default flipped. Programmatic users constructing
   the schema without args now get MAD semantics — pass
   `noise_levels=[1.0]` to preserve v1 microvolt semantics. Fixes a real
   1400× clusterless divergence.
 - `MountainSort4Schema().freq_min`/`freq_max` defaults are `600.0`/`6000.0`
   (Frank-lab tetrode preset), not SI's wrapper defaults
-  ([_params/sorter.py:68-69](./src/spyglass/spikesorting/v2/_params/sorter.py#L68-L69)).
+  ([_params/sorter.py](./src/spyglass/spikesorting/v2/_params/sorter.py)).
 - `WhitenParams` default flipped from "on" to `None` to match the
   runtime (whitening is deferred to the sorter)
-  ([_params/preprocessing.py:110](./src/spyglass/spikesorting/v2/_params/preprocessing.py#L110)).
+  ([_params/preprocessing.py](./src/spyglass/spikesorting/v2/_params/preprocessing.py)).
 - `MountainSort5Schema` gains `filter=False` / `whiten=True` toggles,
   mirroring `MountainSort4Schema`
-  ([_params/sorter.py:111-112](./src/spyglass/spikesorting/v2/_params/sorter.py#L111-L112)).
+  ([_params/sorter.py](./src/spyglass/spikesorting/v2/_params/sorter.py)).
   This makes MS5 handled identically to MS4 by the runtime: the
   recording is already bandpass-filtered upstream, so `filter=False`
   stops MS5 double-filtering it, and a truthy `whiten` routes the
@@ -1117,7 +1117,7 @@ cross-referenced here, not duplicated.
 
 - v1's interval consolidation had an off-by-one bug (dropped the last
   valid sample of each disjoint interval); v2 corrects it
-  ([utils.py:499-575](./src/spyglass/spikesorting/v2/utils.py#L499-L575)).
+  ([utils.py](./src/spyglass/spikesorting/v2/utils.py)).
   v1↔v2 spike counts can differ by a few spikes near artifact-mask
   boundaries; a spike-by-spike comparison on the same input WILL differ
   at those edges. This is correct behavior, not a regression.
@@ -1127,23 +1127,23 @@ cross-referenced here, not duplicated.
 - v1's `noise_levels=[1.0]` on a multi-channel recording silently
   misread channels (singleton indexing in SI's `locally_exclusive` peak
   detection); v2 broadcasts to `n_channels` at runtime
-  ([sorting.py:1605-1640](./src/spyglass/spikesorting/v2/sorting.py#L1605-L1640)).
+  ([sorting.py](./src/spyglass/spikesorting/v2/sorting.py)).
   v1↔v2 clusterless sorts on multi-channel recordings WILL show real,
   correct differences — v2 is the right answer.
 
 **Determinism — random seeds pinned**
 
 - v2 explicitly pins SI's `seed` for `sip.whiten`
-  ([sorting.py:1733-1752](./src/spyglass/spikesorting/v2/sorting.py#L1733-L1752))
+  ([sorting.py](./src/spyglass/spikesorting/v2/sorting.py))
   and for `get_noise_levels`
-  ([sorting.py:1605-1640](./src/spyglass/spikesorting/v2/sorting.py#L1605-L1640)),
+  ([sorting.py](./src/spyglass/spikesorting/v2/sorting.py)),
   after SI PR #3359 changed those defaults from `seed=0` to `seed=None`.
   Per-row override via `SorterParameters.job_kwargs={'random_seed': N}`.
 
 **Default thresholds**
 
 - Artifact detection ships `amplitude_threshold_uv=500` (was `3000` in v1)
-  ([_params/artifact_detection.py:61](./src/spyglass/spikesorting/v2/_params/artifact_detection.py#L61));
+  ([_params/artifact_detection.py](./src/spyglass/spikesorting/v2/_params/artifact_detection.py));
   see the artifact-detection unit-conversion subsection above for the
   full rationale.
 
@@ -1175,30 +1175,30 @@ cross-referenced here, not duplicated.
 
 - Artifact `IntervalList.pipeline` tag `spikesorting_artifact_v1` →
   `spikesorting_artifact_detection_v2`
-  ([artifact.py:918](./src/spyglass/spikesorting/v2/artifact.py#L918)).
+  ([artifact.py](./src/spyglass/spikesorting/v2/artifact.py)).
 
 **Production-scale (chunking, version pin, disk-leak audit)**
 
 - Artifact detection runs a chunked `ChunkRecordingExecutor` pass
   instead of a full in-memory `get_traces` scan
-  ([artifact.py:929](./src/spyglass/spikesorting/v2/artifact.py#L929),
-  [_compute_artifact_chunk](./src/spyglass/spikesorting/v2/artifact.py#L96)).
+  ([artifact.py](./src/spyglass/spikesorting/v2/artifact.py),
+  [_compute_artifact_chunk](./src/spyglass/spikesorting/v2/artifact.py)).
   The `ArtifactDetectionParameters.job_kwargs` blob is now functional
   (`n_jobs`/`chunk_duration`, default `chunk_duration='1s'`, `n_jobs=1`);
   output is frame-identical to the old path.
 - SpikeInterface pinned to `==0.104.3`
-  ([pyproject.toml:69](./pyproject.toml#L69)); KS4/MS5/SC2/TDC2/Generic
+  ([pyproject.toml](./pyproject.toml)); KS4/MS5/SC2/TDC2/Generic
   schemas use `extra="allow"`, so SI-version drift is caught by the
   snapshot tests rather than silently changing sorter defaults.
 - New ops helper `Sorting.find_orphaned_analyzer_folders(*, dry_run=True)`
-  ([sorting.py:1249-1354](./src/spyglass/spikesorting/v2/sorting.py#L1249-L1354))
+  ([sorting.py](./src/spyglass/spikesorting/v2/sorting.py))
   surfaces 5–50 GB analyzer-folder disk leaks from delete-override
   bypass.
 
 **Opt-in back-compat helper**
 
 - `SorterParameters.insert_default_legacy_si_sorters()`
-  ([sorting.py:323-393](./src/spyglass/spikesorting/v2/sorting.py#L323-L393))
+  ([sorting.py](./src/spyglass/spikesorting/v2/sorting.py))
   inserts `('<sorter>', 'default')` rows for installed non-curated SI
   sorters, replicating v1's auto-insert for ported workflows that name a
   sorter via `('kilosort2_5', 'default')`. Opt-in — NOT called by
@@ -1221,7 +1221,7 @@ cross-referenced here, not duplicated.
 - **Overlapping merge groups are rejected.** v1 silently coalesced
   transitively-overlapping groups (`[[1,2],[2,3]]` → `[1,2,3]`) via
   `_union_intersecting_lists`; v2 raises `ValueError`
-  ([curation.py:776](./src/spyglass/spikesorting/v2/curation.py#L776)) —
+  ([curation.py](./src/spyglass/spikesorting/v2/curation.py)) —
   a unit may belong to at most one merge group. Pass pre-unioned,
   disjoint groups.
 - **Curated NWB omits `curation_label` when no unit is labeled.** pynwb
