@@ -544,3 +544,70 @@ def test_plot_sort_group_geometry_multi_probe_offset(monkeypatch):
     assert xranges[0][1] < xranges[1][0]
     assert "offset per probe" in ax.get_xlabel()
     plt.close(fig)
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_sort_group_geometry_specific_reference_star_row(ux_session):
+    """A 'specific'-reference group yields an is_reference=True geometry row.
+
+    The reference electrode is excluded from sort-group membership, so before
+    the fix the ``is_reference`` flag (which the star overlay is gated on) was
+    structurally always False and the star could never render. Assert the
+    (non-member) reference electrode now gets its own row with is_reference=True
+    and plot coordinates, and that the members are NOT flagged.
+    """
+    from spyglass.common.common_ephys import Electrode
+    from spyglass.spikesorting.v2._pipeline_geometry import (
+        _sort_group_geometry_rows,
+    )
+    from spyglass.spikesorting.v2.recording import SortGroupV2
+
+    nwb = ux_session
+    electrodes = sorted(
+        (Electrode & {"nwb_file_name": nwb}).fetch(
+            "electrode_group_name", "electrode_id", as_dict=True
+        ),
+        key=lambda e: int(e["electrode_id"]),
+    )
+    assert len(electrodes) >= 5
+    members = electrodes[:4]
+    member_ids = {int(m["electrode_id"]) for m in members}
+    reference_id = int(electrodes[-1]["electrode_id"])  # real, NON-member
+    assert reference_id not in member_ids
+
+    key = {"nwb_file_name": nwb, "sort_group_id": 9991}
+    try:
+        SortGroupV2.insert1(
+            {
+                **key,
+                "reference_mode": "specific",
+                "reference_electrode_id": reference_id,
+            },
+            skip_duplicates=True,
+        )
+        SortGroupV2.SortGroupElectrode.insert(
+            [
+                {
+                    **key,
+                    "electrode_group_name": m["electrode_group_name"],
+                    "electrode_id": int(m["electrode_id"]),
+                }
+                for m in members
+            ],
+            skip_duplicates=True,
+        )
+        group_rows = [
+            row
+            for row in _sort_group_geometry_rows(nwb)
+            if row["sort_group_id"] == key["sort_group_id"]
+        ]
+        reference_rows = [row for row in group_rows if row["is_reference"]]
+        assert len(reference_rows) == 1
+        assert reference_rows[0]["electrode_id"] == reference_id
+        assert reference_rows[0]["plot_x"] is not None
+        assert reference_rows[0]["plot_y"] is not None
+        member_rows = [row for row in group_rows if not row["is_reference"]]
+        assert {row["electrode_id"] for row in member_rows} == member_ids
+    finally:
+        (SortGroupV2 & key).delete(safemode=False)

@@ -170,8 +170,28 @@ def _sort_group_geometry_rows(nwb_file_name: str) -> list[dict[str, Any]]:
         * BrainRegion
     ).fetch(as_dict=True)
 
+    # Reference electrodes for 'specific'-reference groups are NOT sort-group
+    # members (membership excludes them), so fetch them directly; the group loop
+    # below appends each as a synthetic row so the is_reference star overlay has
+    # a row to render.
+    reference_ids = {
+        _nullable_int(master["reference_electrode_id"])
+        for master in master_by_group.values()
+        if master["reference_mode"] == "specific"
+        and not _missing(master["reference_electrode_id"])
+    }
+    reference_electrode_by_id: dict[int, dict] = {}
+    if reference_ids:
+        reference_electrode_by_id = {
+            int(row["electrode_id"]): row
+            for row in (
+                (Electrode & {"nwb_file_name": nwb_file_name}) * BrainRegion
+                & [{"electrode_id": rid} for rid in reference_ids]
+            ).fetch(as_dict=True)
+        }
+
     probe_restrictions = []
-    for electrode in member_rows:
+    for electrode in [*member_rows, *reference_electrode_by_id.values()]:
         probe_key = {
             "probe_id": electrode.get("probe_id"),
             "probe_shank": electrode.get("probe_shank"),
@@ -222,6 +242,14 @@ def _sort_group_geometry_rows(nwb_file_name: str) -> list[dict[str, Any]]:
             ),
             key=lambda row: int(row["electrode_id"]),
         )
+        # Append the (non-member) specific reference electrode so its row gets
+        # is_reference=True below and renders as the star overlay; it is excluded
+        # from the per-group electrode scatter in plot_sort_group_geometry.
+        if reference_electrode_id in reference_electrode_by_id:
+            group_electrodes = [
+                *group_electrodes,
+                reference_electrode_by_id[reference_electrode_id],
+            ]
         for electrode in group_electrodes:
             rel_x = rel_y = rel_z = contact_size = None
             probe_key = {
@@ -448,7 +476,9 @@ def plot_sort_group_geometry(
     sort_group_ids = sorted({row["sort_group_id"] for row in plottable})
     for color_index, sort_group_id in enumerate(sort_group_ids):
         group_rows = [
-            row for row in plottable if row["sort_group_id"] == sort_group_id
+            row
+            for row in plottable
+            if row["sort_group_id"] == sort_group_id and not row["is_reference"]
         ]
         color = cmap(color_index % cmap.N)
         ax.scatter(
