@@ -1365,8 +1365,9 @@ concurrent use:
 
 - **Streaming Recording writes.** `Recording.make` now streams the
   preprocessed `ElectricalSeries` to NWB via HDMF's
-  `GenericDataChunkIterator` (`buffer_gb=5`, matching v1's production
-  choice). The full trace array is never materialized in RAM; chronic
+  `GenericDataChunkIterator` with a channel-count-scaled write buffer
+  (≈30 s of data, capped at 5 GB). The full trace array is never
+  materialized in RAM; chronic
   recordings (30 kHz × 128 ch × 1 h ≈ 110 GB float64) populate on any
   lab workstation. The chunked-write helpers live in
   `spikesorting.v2._nwb_iterators` (port of v1's

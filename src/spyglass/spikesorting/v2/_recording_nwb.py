@@ -139,7 +139,8 @@ def write_nwb_artifact(
 
     Streams the ``(n_samples, n_channels)`` trace array and the
     ``(n_samples,)`` timestamps vector into the ElectricalSeries
-    via HDMF's ``GenericDataChunkIterator`` (``buffer_gb=5``).
+    via HDMF's ``GenericDataChunkIterator`` with a channel-count-scaled
+    buffer (~30 s of data, capped at 5 GB; see ``write_buffer_gb``).
     Without streaming, a 30 kHz x 128 ch x 1 h recording
     (~110 GB float64) would have to materialize in RAM before the
     NWB write, which OOMs on any lab workstation.
