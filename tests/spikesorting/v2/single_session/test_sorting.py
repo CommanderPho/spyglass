@@ -648,7 +648,14 @@ def test_run_si_sorter_restores_global_job_kwargs(dj_conn, monkeypatch):
     before = dict(si.get_global_job_kwargs())
     assert "chunk_size" not in before  # the key we expect could leak
 
-    monkeypatch.setattr(sis, "run_sorter", lambda **kw: "DUMMY")
+    # run_si_sorter materializes the sorter output into an in-memory
+    # NumpySorting (severing the temp-dir file backing before the scratch dir is
+    # cleaned), so the stub must return a real SI sorting -- a bare sentinel has
+    # no ``to_spike_vector`` for ``NumpySorting.from_sorting`` to materialize.
+    stub_sorting = si.generate_sorting(
+        num_units=2, sampling_frequency=30000.0, durations=[0.1]
+    )
+    monkeypatch.setattr(sis, "run_sorter", lambda **kw: stub_sorting)
 
     rec = _build_synthetic_rec(np.zeros((1000, 4), dtype=np.float32))
     out = Sorting._run_si_sorter(
@@ -658,7 +665,9 @@ def test_run_si_sorter_restores_global_job_kwargs(dj_conn, monkeypatch):
         sorting_id="r3_test",
         job_kwargs={"n_jobs": 1, "chunk_size": 1000},
     )
-    assert out == "DUMMY"
+    # The return is the materialized in-memory sorting, not the stub itself.
+    assert isinstance(out, si.NumpySorting)
+    assert out.get_num_units() == 2
 
     after = dict(si.get_global_job_kwargs())
     assert after == before, (
