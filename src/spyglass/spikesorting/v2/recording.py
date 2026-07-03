@@ -80,6 +80,7 @@ from spyglass.spikesorting.v2.utils import (
     SelectionMasterInsertGuard,
     _validate_params,
     _validate_reference_fields,
+    assert_reference_not_member,
     reject_duplicate_parameter_content,
     transaction_or_noop,
     validate_lookup_rows,
@@ -246,13 +247,33 @@ class SortGroupV2(SpyglassMixin, dj.Manual):
             _validate_reference_fields(r)
         super().insert(rows, **kwargs)
 
-    # An in-place ``update1`` of the reference config is NOT guarded: the
-    # reference is folded into ``recording_id`` (via ``recording_input_hash``),
-    # so a reference change defines a distinct recording. Editing it in place is
-    # caught downstream -- re-running ``insert_selection`` mints a new
-    # recording_id for the new reference, and re-populating an old recording_id
-    # raises ``RecordingInputDriftError`` -- rather than silently serving stale
-    # bytes, so no bespoke guard is needed.
+    def update1(self, row):
+        """Validate the MERGED reference state before an in-place edit.
+
+        A reference change is now ALLOWED (it mints a distinct recording via the
+        ``recording_input_hash`` folded into ``recording_id``, and re-populating
+        an old ``recording_id`` raises ``RecordingInputDriftError`` rather than
+        serving stale bytes -- so the old "reject every reference edit" guard is
+        gone). But the RESULTING state must stay valid: validate the merged
+        (current row + update payload) reference fields, and for a final
+        ``'specific'`` mode reject a reference electrode that is also a group
+        member. ``insert1`` and the part table enforce these at insert; without
+        this override an ``update1`` could persist an invalid ``reference_mode``,
+        a missing/stale ``reference_electrode_id``, or a ``'specific'`` reference
+        that is a member -- state the hash would then content-address and that
+        would only fail late in ``Recording.make_fetch``.
+        """
+        row = dict(row)
+        pk = {k: row[k] for k in self.primary_key}
+        merged = {**(self & pk).fetch1(), **row}
+        _validate_reference_fields(merged)
+        if merged.get("reference_mode") == "specific":
+            assert_reference_not_member(
+                merged["reference_mode"],
+                merged["reference_electrode_id"],
+                (self.SortGroupElectrode & pk).fetch("electrode_id"),
+            )
+        super().update1(row)
 
     # ---- Existing-entry safety ------------------------------------------
 

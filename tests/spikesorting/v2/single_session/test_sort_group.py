@@ -320,6 +320,72 @@ def test_sort_group_reference_mode_enforced(polymer_smoke_session):
     assert eid is None
 
 
+def test_sort_group_update1_validates_merged_reference(polymer_smoke_session):
+    """``SortGroupV2.update1`` permits a valid reference edit (the reference is
+    folded into recording_id, so a change mints a distinct recording) but
+    validates the MERGED (current + payload) state: an invalid mode, a
+    ``'specific'`` mode missing its electrode id, a stale id under a
+    non-specific mode, and a ``'specific'`` reference that is a group member all
+    raise; a valid edit goes through."""
+    from spyglass.common import Electrode
+    from spyglass.spikesorting.v2.recording import SortGroupV2
+
+    nwb_file_name = polymer_smoke_session["nwb_file_name"]
+    _clean_session_v2(polymer_smoke_session)
+    pk = {"nwb_file_name": nwb_file_name, "sort_group_id": 950}
+    # A group of four real electrodes (the part table FKs Electrode, whose PK
+    # includes electrode_group_name), with no reference to start.
+    elecs = (Electrode & {"nwb_file_name": nwb_file_name}).fetch(
+        "electrode_group_name", "electrode_id", as_dict=True
+    )[:4]
+    members = sorted(int(e["electrode_id"]) for e in elecs)
+    a_member = members[0]
+    a_non_member = max(members) + 1000  # outside the group (no FK on ref id)
+    SortGroupV2.insert1({**pk, "reference_mode": "none"})
+    SortGroupV2.SortGroupElectrode.insert([{**pk, **e} for e in elecs])
+
+    # Invalid mode -> rejected (merged fails the ReferenceMode Literal).
+    with pytest.raises(ValueError, match="reference_mode"):
+        SortGroupV2().update1({**pk, "reference_mode": "globalmedian"})
+
+    # specific with no electrode id -> rejected (merged id stays NULL).
+    with pytest.raises(ValueError, match="requires a non-null"):
+        SortGroupV2().update1({**pk, "reference_mode": "specific"})
+
+    # specific reference that IS a member -> rejected (would sort short).
+    with pytest.raises(ValueError, match="sort-group channel"):
+        SortGroupV2().update1(
+            {
+                **pk,
+                "reference_mode": "specific",
+                "reference_electrode_id": a_member,
+            }
+        )
+
+    # Set a valid specific reference to a NON-member, then switching to a
+    # non-specific mode WITHOUT clearing the id leaves a stale id -> rejected.
+    SortGroupV2().update1(
+        {
+            **pk,
+            "reference_mode": "specific",
+            "reference_electrode_id": a_non_member,
+        }
+    )
+    assert (SortGroupV2 & pk).fetch1("reference_electrode_id") == a_non_member
+    with pytest.raises(ValueError, match="must leave"):
+        SortGroupV2().update1({**pk, "reference_mode": "none"})
+
+    # A valid edit (clear the reference) goes through.
+    SortGroupV2().update1(
+        {**pk, "reference_mode": "none", "reference_electrode_id": None}
+    )
+    mode, eid = (SortGroupV2 & pk).fetch1(
+        "reference_mode", "reference_electrode_id"
+    )
+    assert mode == "none"
+    assert eid is None
+
+
 # ===========================================================================
 # Edge-case coverage for SortGroupV2 reference handling and group construction.
 #
