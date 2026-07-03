@@ -118,10 +118,17 @@ fix — one hash covers membership, reference, and the interpolate bad-channel s
   than aliasing or later failing to rebuild.
 - `make_fetch` raises `RecordingInputDriftError` when the live inputs no longer
   match the stored hash (inputs changed after selection).
-- The `SortGroupV2.update1` reference guard's now-false rationale (it claimed the
-  reference is NOT in `recording_id`) was corrected, and the two recording tests
-  that reused one `recording_id` across a reference change were rewritten to the
-  new "reference change → distinct id" model.
+- The `SortGroupV2.update1` reference-mutation guard (commit `0c503eee`) was
+  REMOVED (commit `3c404504`): folding the reference into `recording_id` makes it
+  redundant — a reference change mints a distinct recording via
+  `insert_selection`, and re-populating an old `recording_id` raises
+  `RecordingInputDriftError`, so an in-place edit can no longer silently serve
+  stale bytes. The recording tests that reused one `recording_id` across a
+  reference change were rewritten to the new "reference change → distinct id"
+  model.
+- Review follow-ups (commit `3c404504`): the curated missing-`PreprocessingParameters`
+  message now runs BEFORE the input-hash resolver (which reads that row), so a
+  missing/custom params name is not masked by a raw empty-fetch error.
 - Verified across unit + selection-identity integration + preflight + core
   recording + full pipeline + concat suites (all green).
 
