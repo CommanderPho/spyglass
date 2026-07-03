@@ -1,7 +1,7 @@
 [build-system]
 build-backend = "hatchling.build"
 
-requires = [ "hatch-vcs", "hatchling" ]
+requires = ["hatch-vcs", "hatchling"]
 
 [project]
 name = "spyglass-neuro"
@@ -30,18 +30,17 @@ authors = [
   { name = "Chris Brozdowski", email = "chris.broz@ucsf.edu" },
   { name = "Samuel Bray", email = "sam.bray@ucsf.edu" },
 ]
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.9,<3.12"
 classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
 ]
-dynamic = [ "version" ]
+dynamic = ["version"]
 dependencies = [
-  "black[jupyter]>26",
   "bottleneck",
   "dask",
   "datajoint>=0.14.5,<2.0",
@@ -92,17 +91,14 @@ optional-dependencies.kachery-cloud = [
   "kachery-client",
   "kachery-cloud>=0.4",
 ]
-optional-dependencies.moseq-cpu = [
-  "jax[cpu]",
-  "jax-moseq",
-  "keypoint-moseq",
-]
+optional-dependencies.moseq-cpu = ["jax[cpu]", "jax-moseq", "keypoint-moseq"]
 optional-dependencies.moseq-gpu = [
   "jax[cuda12]",
   "jax-moseq[cuda12]",
   "keypoint-moseq",
 ]
 optional-dependencies.test = [
+  "black[jupyter]>=24,<26", # linting; <26 required for Python 3.9
   "codecov",                # for code coverage badge
   "docker",                 # for tests in a container
   "ghostipy",
@@ -128,11 +124,11 @@ source = "vcs"
 version-file = "src/spyglass/_version.py"
 
 [tool.hatch.build.targets.sdist]
-exclude = [ ".git_archival.txt" ]
+exclude = [".git_archival.txt"]
 
 [tool.hatch.build.targets.wheel]
-packages = [ "src/spyglass" ]
-exclude = [  ]
+packages = ["src/spyglass"]
+exclude = []
 
 [tool.black]
 line-length = 80
@@ -140,7 +136,7 @@ line-length = 80
 [tool.ruff] # CB: Propose replacing flake8 with ruff to delete setup.cfg
 line-length = 80
 
-lint.ignore = [ "E402", "E501", "F401" ]
+lint.ignore = ["E402", "E501", "F401"]
 
 [tool.codespell]
 skip = '.git,*.pdf,*.svg,*.ipynb,./docs/site/**,temp*'
@@ -165,7 +161,7 @@ addopts = [
   "--cov-report=term-missing",
   "--no-cov-on-fail",
 ]
-testpaths = [ "tests" ]
+testpaths = ["tests"]
 log_level = "INFO"
 env = [
   "QT_QPA_PLATFORM = offscreen", # QT fails headless without this
@@ -202,7 +198,7 @@ markers = [
 ]
 
 [tool.coverage.run] # NOTE: changes need to be mirrored in tests/.coveragerc
-source = [ "*/src/spyglass/*" ]
+source = ["*/src/spyglass/*"]
 omit = [ # which submodules have no tests
   "*/__init__.py",
   "*/_version.py",
