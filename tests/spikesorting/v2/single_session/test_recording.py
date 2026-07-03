@@ -1055,16 +1055,15 @@ def test_recording_make_global_median_reference(polymer_smoke_session):
 
     # Switch the sort group to global-median reference. reference_mode is folded
     # into recording_id (via recording_input_hash), so this defines a DISTINCT
-    # recording, not an in-place edit of the unref one: the update1 guard rejects
-    # a bare reference edit, so use its escape hatch, then insert_selection mints
-    # a new recording_id for the global-median reference.
+    # recording: insert_selection below mints a new recording_id for the
+    # global-median reference, and re-populating the old (unref) id would raise
+    # RecordingInputDriftError -- so a bare in-place update1 is safe (no guard).
     SortGroupV2().update1(
         {
             "nwb_file_name": nwb_file_name,
             "sort_group_id": sort_group_id,
             "reference_mode": "global_median",
-        },
-        allow_reference_mutation=True,
+        }
     )
     assert (
         SortGroupV2

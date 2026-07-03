@@ -744,6 +744,26 @@ def test_recording_input_hash_matches_make_fetch(populated_sorting):
 
 @pytest.mark.slow
 @pytest.mark.integration
+def test_recording_selection_missing_params_gives_curated_error(
+    fresh_recording_identity,
+):
+    """A missing ``preprocessing_params_name`` yields the curated
+    ``insert_default()`` message, not the raw empty-fetch error from the
+    input-hash resolver (which ``fetch1``'s that params row). The curated
+    lookup check must run BEFORE the resolver."""
+    from spyglass.spikesorting.v2.recording import RecordingSelection
+
+    bogus = {
+        **fresh_recording_identity,
+        "preprocessing_params_name": "does_not_exist_preproc_params",
+    }
+    with pytest.raises(ValueError, match="insert_default"):
+        RecordingSelection.insert_selection(bogus)
+    assert len(RecordingSelection & bogus) == 0
+
+
+@pytest.mark.slow
+@pytest.mark.integration
 def test_direct_master_insert_rejected_without_flag(fresh_recording_identity):
     """A direct insert into a selection master is rejected with a pointer to
     insert_selection; allow_direct_insert=True is the explicit escape hatch.

@@ -246,39 +246,13 @@ class SortGroupV2(SpyglassMixin, dj.Manual):
             _validate_reference_fields(r)
         super().insert(rows, **kwargs)
 
-    def update1(self, row, *, allow_reference_mutation=False):
-        """Reject an in-place row edit unless ``allow_reference_mutation``.
-
-        A sort group's ``reference_mode`` / ``reference_electrode_id`` shape the
-        referenced traces the ``Recording`` persists AND are folded into
-        ``recording_id`` (via ``recording_input_hash``), so a reference change
-        defines a DISTINCT recording. Editing them in place under the same
-        sort-group key therefore desynchronizes the group from every
-        ``recording_id`` already minted off its old reference: re-running
-        ``insert_selection`` mints a new recording for the new reference, and
-        re-populating an old ``recording_id`` now raises
-        ``RecordingInputDriftError`` rather than silently serving stale bytes.
-        The clean path for a reference change is ``insert_selection`` (which
-        mints the new-reference recording) or delete-and-recreate the group --
-        via ``set_group_by_shank`` / ``set_group_by_electrode_table_column`` with
-        ``delete_existing_entries`` after reviewing the ``DeletionPreview``.
-        Pass ``allow_reference_mutation=True`` for a deliberate in-place edit
-        (e.g. a test, or a group whose old recordings are being re-minted).
-        """
-        if not allow_reference_mutation:
-            raise dj.errors.DataJointError(
-                "In-place update1 of SortGroupV2 is not supported: a group's "
-                "reference config shapes the persisted Recording and is folded "
-                "into recording_id, so a reference change defines a new "
-                "recording. Editing it in place desynchronizes the group from "
-                "the recording_ids already minted off its old reference. Change "
-                "the reference by delete-and-recreate (set_group_by_* with "
-                "delete_existing_entries) and re-run insert_selection, which "
-                "mints the new-reference recording. Pass "
-                "allow_reference_mutation=True only for a deliberate in-place "
-                "edit."
-            )
-        super().update1(row)
+    # An in-place ``update1`` of the reference config is NOT guarded: the
+    # reference is folded into ``recording_id`` (via ``recording_input_hash``),
+    # so a reference change defines a distinct recording. Editing it in place is
+    # caught downstream -- re-running ``insert_selection`` mints a new
+    # recording_id for the new reference, and re-populating an old recording_id
+    # raises ``RecordingInputDriftError`` -- rather than silently serving stale
+    # bytes, so no bespoke guard is needed.
 
     # ---- Existing-entry safety ------------------------------------------
 
@@ -1035,18 +1009,31 @@ class RecordingSelection(SelectionMasterInsertGuard, SpyglassMixin, dj.Manual):
             _is_duplicate_key_error,
         )
 
-        # Validate the FK set up front (clean errors before any DB read), then
-        # resolve the content-addressed input hash from the live sort-group
+        # Validate the FK set up front (clean errors before any DB read).
+        identity = recording_identity_payload(key)
+        # Translate a missing PreprocessingParameters row into the curated
+        # "insert_default()" message BEFORE resolving the input hash: the
+        # resolver fetch1's that row's params, so a missing row would otherwise
+        # surface as a raw empty-fetch error and mask this actionable message.
+        _ensure_lookup_row_exists(
+            PreprocessingParameters,
+            {
+                "preprocessing_params_name": identity[
+                    "preprocessing_params_name"
+                ]
+            },
+            helper_name="RecordingSelection.insert_selection",
+            insert_default_path="PreprocessingParameters.insert_default()",
+        )
+        # Resolve the content-addressed input hash from the live sort-group
         # inputs (membership + reference + interpolate bad-channels) so a changed
         # input set mints a new recording_id rather than aliasing this one.
-        identity = recording_identity_payload(key)
         input_hash = resolve_recording_input_hash(
             identity["nwb_file_name"],
             identity["sort_group_id"],
             identity["preprocessing_params_name"],
         )
-        # Pure half: validate the FK set, derive the deterministic
-        # recording_id, and shape the row to insert (steps 1 + 3 above).
+        # Pure half: derive the deterministic recording_id and shape the row.
         plan = build_recording_selection_plan(
             key, recording_input_hash=input_hash
         )
@@ -1057,19 +1044,6 @@ class RecordingSelection(SelectionMasterInsertGuard, SpyglassMixin, dj.Manual):
         if existing is not None:
             return existing
 
-        # Translate the would-be DataJoint FK IntegrityError into a
-        # clear "missing default row" message before the insert attempts.
-        if "preprocessing_params_name" in plan.master_restriction:
-            _ensure_lookup_row_exists(
-                PreprocessingParameters,
-                {
-                    "preprocessing_params_name": plan.master_restriction[
-                        "preprocessing_params_name"
-                    ]
-                },
-                helper_name="RecordingSelection.insert_selection",
-                insert_default_path="PreprocessingParameters.insert_default()",
-            )
         new_key = plan.master_row
         try:
             # allow_direct_insert: this helper IS the validation boundary.
