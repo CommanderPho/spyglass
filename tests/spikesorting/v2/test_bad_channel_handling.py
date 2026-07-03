@@ -137,6 +137,14 @@ class _FakeRecording:
             "after_remove",
         )
 
+    def set_channel_offsets(self, offsets):
+        # SI 0.104.3: mutates IN PLACE and returns None. The write path zeroes
+        # per-channel offsets after referencing; a no-op here, and deliberately
+        # NOT recorded in ``calls`` -- the order assertions track the SI
+        # PROCESSING steps (filter/interpolate/reference), not this metadata
+        # write, so appending it would break the exact-sequence checks.
+        return None
+
 
 def _patch_sip(monkeypatch, calls):
     import spikeinterface.preprocessing as sip

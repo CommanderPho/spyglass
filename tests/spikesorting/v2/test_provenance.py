@@ -246,30 +246,36 @@ def test_sorting_row_records_effective_seed_and_versions(populated_sorting):
     assert row["effective_random_seed"] == 0
 
 
-def test_ambient_seed_warns(restore_custom_config, caplog):
-    """An ambient ``dj.config`` seed (no per-row seed) is used by the sort,
-    stored as ``effective_random_seed``, and surfaced by the one-time warning.
-    A clusterless sort stores ``sorter_version=None`` (in-process) but still
-    records ``spikeinterface_version``."""
+def test_ambient_seed_rejected_then_records_clusterless_provenance(
+    restore_custom_config,
+):
+    """A seed-dependent sort REJECTS an ambient-only ``random_seed`` at
+    populate: the clusterless smoke sort whitens (which samples random chunks
+    and is seed-dependent), so an ambient seed changes the output WITHOUT
+    changing ``sorting_id`` and must instead live in the ``SorterParameters``
+    row. (The unit-level reject is pinned by
+    ``test_resolve_effective_seed_rejects_ambient_when_flagged``; this covers the
+    integration path via ``Sorting.populate``.) With the ambient seed cleared,
+    the same sort populates and records clusterless provenance:
+    ``sorter_version`` is None (in-process, no distribution version),
+    ``spikeinterface_version`` is recorded, and the effective seed defaults to
+    0."""
     from spyglass.spikesorting.v2.sorting import Sorting
 
     sort_pk = _setup_clusterless_smoke_sort("mearec_provenance_ambient.nwb")
-    dj.config["custom"]["spikesorting_v2_job_kwargs"] = {"random_seed": 7}
-    _warn_ambient_seed_once.cache_clear()
-    with caplog.at_level(logging.WARNING, logger="spyglass"):
-        Sorting.populate(sort_pk, reserve_jobs=False)
 
+    dj.config["custom"]["spikesorting_v2_job_kwargs"] = {"random_seed": 7}
+    with pytest.raises(ValueError, match="random_seed to live in the"):
+        Sorting.populate(sort_pk, reserve_jobs=False)
+    # The rejected sort wrote no row (the seed check runs first in make_compute).
+    assert len(Sorting & sort_pk) == 0
+
+    dj.config["custom"]["spikesorting_v2_job_kwargs"] = {}
+    Sorting.populate(sort_pk, reserve_jobs=False)
     row = (Sorting & sort_pk).fetch1()
-    assert row["effective_random_seed"] == 7
     assert row["sorter_version"] is None
     assert row["spikeinterface_version"] == si.__version__
-    ambient_warnings = [
-        r
-        for r in caplog.records
-        if "random_seed" in r.getMessage().lower()
-        and "ambient" in r.getMessage().lower()
-    ]
-    assert len(ambient_warnings) == 1
+    assert row["effective_random_seed"] == 0
 
 
 # --- never-identity parity ------------------------------------------------
