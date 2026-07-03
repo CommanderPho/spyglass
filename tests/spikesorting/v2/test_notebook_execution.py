@@ -49,6 +49,29 @@ def _require_fixture():
         )
 
 
+@pytest.fixture(autouse=True)
+def _restore_pipeline_preset_registry():
+    """Undo any in-session pipeline-preset registration a notebook makes.
+
+    ``_execute_notebook`` runs cells IN-PROCESS (see the module docstring), so
+    the presets notebook's ``register_pipeline_preset`` / ``clone_pipeline_preset``
+    calls mutate the module-level ``_PIPELINE_PRESETS`` dict (adding ``my_lab_*``)
+    for the whole pytest process. Without restoring it those registrations leak
+    into later tests that iterate the registry -- the preset-enumeration and
+    recipe-parity tests then see a preset with no ``intended_use`` or a
+    non-shipped sorter row. Snapshot and restore around every test in this
+    module so a notebook's in-session registrations stay local to it.
+    """
+    from spyglass.spikesorting.v2 import _pipeline_presets as _pp
+
+    snapshot = dict(_pp._PIPELINE_PRESETS)
+    try:
+        yield
+    finally:
+        _pp._PIPELINE_PRESETS.clear()
+        _pp._PIPELINE_PRESETS.update(snapshot)
+
+
 def _execute_notebook(ipynb_path: Path, parameters: dict) -> dict:
     """Run a notebook's code cells in-process; return the final namespace.
 
